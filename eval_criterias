@@ -1,0 +1,54 @@
+Lab 4: DEFINE (Project Inception, Literature Review & System Proposal | 2 Sep 2026)
+
+Starting from Lab 4, you will begin working on your full-fledged project, which will be evaluated incrementally through progressive milestones from Lab 4 through Lab 9 with this flow:
+
+Define (Lab 4) → Design (Lab 5) → Build (Lab 6) → Test (Lab 7) → Improve (Lab 8) → Validate (Lab 9) → Project Completion (Labs 10-12)
+
+Lab 4 will commence at 4:00 PM, followed by in-person presentations and evaluations starting at 4:05 PM.
+
+Before Lab 4, Please:
+Conduct Literature & Market Research: Review existing literature, research papers, and relevant benchmark applications related to your chosen project topic.
+Identify Implementation Gaps: Critically analyze what existing solutions lack or where previous systems fall short in terms of user experience, features, or interface design.
+Prepare Your Presentation & Report: Prepare a concise slide deck for your live pitch and compile your written literature evaluation report.
+Lab 4 Evaluation Tasks & Deliverables:
+Task 1: Live Project Pitch & Presentation (4.0 Marks)
+Present a structured walkthrough of your project concept, problem statement, target user personas, and design goals.
+Defend your proposed system during a brief live Q&A session.
+Task 2: Literature & Proposal Report Submission (4.0 Marks)
+Part A: Implementation Gaps (2.0 Marks): Detail the limitations, design flaws, or functional shortcomings identified across existing literature/systems.
+Part B: Proposed Solution & System Architecture (2.0 Marks): Provide your high-level system architecture, core feature roadmap, and explain how your proposed design addresses the identified gaps.
+Note:
+A Google Form link for submitting your presentation slides and literature report (PDF) will be shared during or after the lab.
+Please ensure your slides and documents are ready for immediate screen sharing and review when called upon.
+
+Lab 5: DESIGN (Interaction Design & Prototyping | 9 Sep 2026)
+
+To identify at least 2 most important user tasks and design a prototype that demonstrates how users will accomplish these tasks.
+
+In-person presentation/evaluation will start at 4:00 PM. Before the lab, please review your Lab 4 problem statement, target users, goals, proposed solution, and system architecture and work on the following deliverables in Lab 5.
+
+Lab 5 Evaluation Tasks & Deliverables:
+Task 1: Define User Tasks (2.0 Marks)
+Identify at least 2 important user tasks.
+Briefly describe the user, goal, and expected outcome for each task.
+Task 2: Design & Prototype (4.0 Marks)
+Create the low-fidelity design/user flow for the selected tasks.
+Design the key screens and interactions required to complete these tasks.
+Create a clickable prototype demonstrating the key interactions.
+Task 3: Design Rationale (2.0 Marks)
+Explain the rationale behind your important design and interaction decisions.
+Note:
+A Google Form link for submitting your design/prototype will be shared during the lab.
+The Lab 5 expectation is to focus on the 2 most important user tasks and their key interactions. The complete project does not need to be designed at this stage.
+In Lab 6 (23 Sep, after MST), we will begin the Build phase, where you will implement a baseline or one important feature of your project. The entire implementation is not expected at this stage and will be completed during Labs 10-12.
+We will continue to follow the industry-standard flow: Define (Lab 4) → Design (Lab 5) → Build (Lab 6) → Test (Lab 7) → Improve (Lab 8) → Validate (Lab 9) → Project Completion & Release (Labs 10–12).
+
+Lab 6: BUILD (Evaluate the Code Implementation so far | 23 Sep 2026)
+
+Hello everyone, Lab 6 will focus on the code you have implemented "so far" for the project. Since it is scheduled a few days after your mid-semester exams, it will be relatively light. You do not need to build anything new specifically. We will discuss and evaluate whatever you have implemented so far, whether it was developed independently or with the help of LLMs (which is fine), on spot, based on three parameters:
+1) Implementation & Functionality (4 marks): What have you built so far, is it in line with the requirements, and how well does it work?
+2) Code Organization & Quality (2 marks): Is your code reasonably structured, modular, readable, well organized, and documented?
+3) Problem-Solving & Debugging Approach (2 marks): What problems did you face during implementation, and how did you identify, debug, and resolve them?
+
+Thanks and all the best for the MSTs.
+

@@ -1,0 +1,20 @@
+services:
+  interval-portal:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: interval-portal
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - INTERVAL_DATA_DIR=/app/data
+      - JWT_SECRET=production-secret-replace-in-prod
+    volumes:
+      - interval_data:/app/data
+
+volumes:
+  interval_data:
+    driver: local

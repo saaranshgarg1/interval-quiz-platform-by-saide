@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interval — Low-fidelity clickable prototype (Lab 5)</title>
+<style>
+  :root {
+    --ink:#1c2430; --mut:#5b6a7a; --accent:#2f6fed; --ok:#1f8a54; --warn:#b25e09; --bad:#b3261e;
+    --line:#9aa4b2; --bg:#f4f6fa; --card:#ffffff;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 "Segoe UI", system-ui, sans-serif; color:var(--ink); background:var(--bg); }
+  .topbar { display:flex; align-items:center; gap:1rem; padding:.6rem 1rem; background:#fff;
+    border-bottom:2px solid var(--line); position:sticky; top:0; z-index:20; flex-wrap:wrap; }
+  .brand { font-weight:700; letter-spacing:.5px; }
+  .brand b { color:var(--accent); }
+  .tasknav { display:flex; gap:.35rem; flex-wrap:wrap; }
+  .tasknav button, .jump button { font:inherit; font-size:12.5px; padding:.25rem .6rem; cursor:pointer;
+    border:1px solid var(--line); border-radius:6px; background:#fff; }
+  .tasknav button.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .jump { flex:1; text-align:right; }
+  .stage { max-width:960px; margin:1.2rem auto; padding:0 1rem; }
+  .hint { color:var(--mut); font-size:12px; text-align:center; margin:0 0 1rem; }
+  .screen { display:none; background:var(--card); border:1px dashed var(--line); border-radius:10px;
+    padding:1.4rem; box-shadow:0 1px 4px rgba(28,36,48,.06); }
+  .screen.active { display:block; }
+  .kicker { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--mut); margin:0 0 .3rem; }
+  h1 { font-size:1.35rem; margin:0 0 .25rem; } h2 { font-size:1.05rem; margin:1rem 0 .4rem; }
+  .sub { color:var(--mut); margin:0 0 1rem; }
+  .card { border:1px solid var(--line); border-radius:8px; padding:.9rem 1rem; margin:.6rem 0; background:#fff; }
+  .cardrow { display:flex; align-items:center; gap:.6rem; justify-content:space-between; flex-wrap:wrap; }
+  .btn { display:inline-block; border:1px solid var(--line); background:#fff; color:var(--ink);
+    font:inherit; font-weight:600; padding:.45rem .95rem; border-radius:8px; cursor:pointer; text-decoration:none; }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .btn.ok { background:var(--ok); border-color:var(--ok); color:#fff; }
+  .btn.ghost { background:transparent; }
+  .btn.danger { background:#fff; color:var(--bad); border-color:var(--bad); }
+  .tag { font-size:12px; font-weight:600; padding:.12rem .5rem; border-radius:999px; border:1px solid var(--line); }
+  .tag.accent { color:var(--accent); border-color:var(--accent); }
+  .tag.ok { color:var(--ok); border-color:var(--ok); }
+  .tag.warn { color:var(--warn); border-color:#e6b35c; }
+  .tag.bad { color:var(--bad); border-color:#e08a85; }
+  ul.tight { margin:.3rem 0; padding-left:1.1rem; } ul.tight li { margin:.2rem 0; }
+  .note { background:#eaf1ff; border-left:4px solid var(--accent); padding:.5rem .8rem; border-radius:0 8px 8px 0;
+    font-size:13px; margin:.7rem 0; }
+  .warnbox { background:#fff7ea; border-left:4px solid var(--warn); padding:.5rem .8rem; border-radius:0 8px 8px 0;
+    font-size:13px; margin:.7rem 0; }
+  .badbox { background:#fdeceb; border-left:4px solid var(--bad); padding:.5rem .8rem; border-radius:0 8px 8px 0;
+    font-size:13px; margin:.7rem 0; }
+  .okbox { background:#e8f6ee; border-left:4px solid var(--ok); padding:.5rem .8rem; border-radius:0 8px 8px 0;
+    font-size:13px; margin:.7rem 0; }
+  table { width:100%; border-collapse:collapse; margin:.6rem 0; font-size:13.5px; }
+  th, td { border:1px solid var(--line); padding:.45rem .6rem; text-align:left; vertical-align:top; }
+  th { background:#f0f3f8; }
+  .field { margin:.6rem 0; } label { display:block; font-weight:600; font-size:13px; margin-bottom:.25rem; }
+  .inp { width:100%; border:1px solid var(--line); border-radius:6px; padding:.45rem .6rem; font:inherit; }
+  .player-head { display:flex; gap:.8rem; align-items:center; border-bottom:1px solid var(--line);
+    padding-bottom:.6rem; margin-bottom:.8rem; font-weight:600; }
+  .timer { margin-left:auto; color:var(--bad); font-variant-numeric:tabular-nums; }
+  .save { display:inline-flex; gap:.4rem; align-items:center; font-size:13px; font-weight:600; padding:.25rem .6rem;
+    border-radius:999px; border:1px solid var(--line); }
+  .save.ok { color:var(--ok); border-color:var(--ok); background:#e8f6ee; }
+  .save.pending { color:var(--warn); border-color:#e6b35c; background:#fff7ea; }
+  .save.error { color:var(--bad); border-color:#e08a85; background:#fdeceb; }
+  .q { border:1px solid var(--line); border-radius:8px; padding:1rem; margin:.9rem 0; }
+  .opt { display:flex; gap:.5rem; align-items:center; border:1px solid var(--line); border-radius:6px;
+    padding:.45rem .7rem; margin:.35rem 0; cursor:pointer; }
+  .opt.sel { background:#eaf1ff; border-color:var(--accent); }
+  .dots { display:flex; gap:.4rem; margin:.9rem 0; flex-wrap:wrap; }
+  .dot { width:30px; height:30px; border-radius:50%; border:1px solid var(--line); display:grid; place-items:center;
+    font-size:12.5px; cursor:pointer; background:#fff; }
+  .dot.cur { border-color:var(--accent); background:#eaf1ff; font-weight:700; }
+  .dot.answered { background:var(--ok); border-color:var(--ok); color:#fff; }
+  .foot { display:flex; gap:.6rem; justify-content:space-between; flex-wrap:wrap; }
+  .receipt { text-align:center; padding:1.4rem; }
+  .receipt .id { font:14px/1.6 ui-monospace, Consolas, monospace; background:#f0f3f8; display:inline-block;
+    padding:.4rem .8rem; border-radius:8px; border:1px dashed var(--line); }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
+  .pending-dot { color:var(--warn); animation:blink 1s infinite; }
+  .reveal { display:flex; gap:.6rem; justify-content:center; margin-top:1.4rem; }
+  .reveal button { font:inherit; font-size:13px; padding:.4rem .9rem; cursor:pointer; border-radius:8px; border:1px solid var(--line); background:#fff; }
+  .mrow td { border:none; border-bottom:1px dashed var(--line); padding:.5rem .2rem; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">Interval<b>◇</b></div>
+  <div class="tasknav">
+    <button onclick="show('home')">Home (eyes only)</button>
+    <button onclick="show('t1-home')">T1 start</button>
+    <button onclick="show('t2-preflight')">T2 start</button>
+  </div>
+  <div class="jump jump"><select id="jmp" onchange="show(this.value); this.value='';">
+    <option value="">Jump to a screen…</option>
+    <optgroup label="Task 1 — Instructor publishes a quiz">
+      <option value="t1-home">T1 · Dashboard / course</option>
+      <option value="t1-editor">T1 · New quiz (title + instructions)</option>
+      <option value="t1-questions">T1 · Question list</option>
+      <option value="t1-qedit">T1 · Question editor</option>
+      <option value="t1-policy">T1 · Settings & integrity policy</option>
+      <option value="t1-preview">T1 · Preview (student view)</option>
+      <option value="t1-published">T1 · Published (frozen) — edit clones</option>
+      <option value="t1-incidents">T1 · Incidents inbox (after T2)</option>
+    </optgroup>
+    <optgroup label="Task 2 — Student submits a quiz">
+      <option value="t2-preflight">T2 · Preflight card</option>
+      <option value="t2-player">T2 · Player (answer on same surface)</option>
+      <option value="t2-saving">T2 · Saving state</option>
+      <option value="t2-offline">T2 · Network drop (pending)</option>
+      <option value="t2-locked">T2 · Strict lock</option>
+      <option value="t2-receipt">T2 · Receipt</option>
+      <option value="t2-result">T2 · Result breakdown</option>
+    </optgroup>
+  </select></div>
+</div>
+
+<div class="stage">
+  <p class="hint">Wireframe prototype — grey boxes, sticky-note annotations trace every feature back to a proposal gap (G1–G4).</p>
+
+  <!-- ============================================================= HOME -->
+  <section class="screen" id="home">
+    <p class="kicker">Reading task — start here</p>
+    <h1>Two tasks, evaluator-led</h1>
+    <table>
+      <tr><th>#</th><th>Task</th><th>Actor</th><th>Core need</th><th>Gap</th></tr>
+      <tr><td>1</td><td>Publish an integrity-protected quiz</td><td>Instructor</td><td>Safe authoring, never break a live exam</td><td>G4 (+G3)</td></tr>
+      <tr><td>2</td><td>Complete & submit a quiz without losing work</td><td>Student</td><td>Answers confirmed, receipt trusted, fair lock</td><td>G1, G2 (+G3)</td></tr>
+    </table>
+    <p class="sub">Task 2's strict-policy lock variant feeds Task 1's Incidents inbox on the last screen. Recommended order: Task 1 → Task 2.</p>
+    <div class="reveal">
+      <button class="btn primary" onclick="show('t1-home')">Start Task 1 →</button>
+      <button class="btn" onclick="show('t2-preflight')">Jump to Task 2</button>
+    </div>
+  </section>
+
+  <!-- ========================================================= T1 HOME -->
+  <section class="screen" id="t1-home">
+    <p class="kicker">Task 1 · step 1/7</p>
+    <h1>Dashboard — courses</h1>
+    <p class="sub"><b>Goal:</b> open the course, create a new quiz. Everything about quizzes below is a wireframe; nothing is live yet.</p>
+
+    <h2>Your courses (staff)</h2>
+    <div class="card cardrow">
+      <div><strong>AI511</strong> · Human-Computer Interaction <span class="tag">staff</span></div>
+      <button class="btn primary" onclick="show('t1-editor')">Open course →</button>
+    </div>
+    <div class="card cardrow">
+      <div><strong>CS305</strong> · Database Systems <span class="tag">staff</span></div>
+      <button class="btn" onclick="show('t1-editor')">Open course →</button>
+    </div>
+
+    <div class="note"><b>Sticky note — why one screen:</b> creating content from the place where it is used (G4). The
+    course page lists quizzes with a clear <em>New quiz</em> action and their version badges (draft / published vN).</div>
+    <div class="reveal">
+      <button onclick="show('home')">← Home</button>
+      <button class="btn primary" onclick="show('t1-editor')">Next: new quiz →</button>
+    </div>
+  </section>
+
+  <!-- ========================================================= T1 EDITOR -->
+  <section class="screen" id="t1-editor">
+    <p class="kicker">Task 1 · step 2/7</p>
+    <h1>New quiz — title & instructions</h1>
+    <p class="sub">Draft lives in the course. Nothing here is visible to students until <em>Publish</em>.</p>
+    <div class="field"><label>Title</label><input class="inp" value="HCI checkpoint 1 — visibility of system status"></div>
+    <div class="field"><label>Instructions (shown on the student preflight card)</label>
+      <textarea class="inp" rows="3">Answer all questions. Answers are saved automatically; check the save indicator. Your receipt confirms submission.</textarea></div>
+    <div class="field"><label>Open / close window (optional)</label><input class="inp" value="2026-09-25 09:00  → 2026-10-02 17:00"></div>
+    <div class="note"><b>Sticky note — why instructions here:</b> authored once, replayed verbatim on preflight and in the
+    player header (G3 — no invented rules).</div>
+    <div class="reveal">
+      <button onclick="show('t1-home')">← Back</button>
+      <button class="btn primary" onclick="show('t1-questions')">Add questions →</button>
+    </div>
+  </section>
+
+  <!-- ========================================================= T1 QUESTIONS -->
+  <section class="screen" id="t1-questions">
+    <p class="kicker">Task 1 · step 3/7</p>
+    <h1>Quiz draft — questions</h1>
+    <table>
+      <tr><th>#</th><th>Type</th><th>Question</th><th>Points</th><th>Key?</th></tr>
+      <tr><td>1</td><td>single</td><td>Which principle explains “is my answer saved?” feedback?</td><td>1</td><td>✓ set</td></tr>
+      <tr><td>2</td><td>multiple</td><td>Select the states a student should be able to distinguish (G2).</td><td>2</td><td>✓ set</td></tr>
+      <tr><td>3</td><td>numeric</td><td>350 students save once / 5 s → saves per second?</td><td>1</td><td>✓ set</td></tr>
+      <tr><td>4</td><td>short</td><td>Heuristic that keeps question + answer on one surface?</td><td>1</td><td>✓ set</td></tr>
+    </table>
+    <button class="btn" onclick="show('t1-qedit')">+ Add question</button>
+    <span class="tag accent">4 questions · 5 pts</span>
+    <div class="note"><b>Sticky note — why inline “? set”:</b> no question may reach publish without an answer key; the list
+    states it directly (error prevention).</div>
+    <div class="reveal">
+      <button onclick="show('t1-editor')">← Back</button>
+      <button class="btn primary" onclick="show('t1-policy')">Configure behaviour →</button>
+    </div>
+  </section>
+
+  <!-- ========================================================= T1 QEDIT -->
+  <section class="screen" id="t1-qedit">
+    <p class="kicker">Task 1 · step 3b/7</p>
+    <h1>Question editor</h1>
+    <div class="field"><label>Type</label>
+      <select class="inp"><option>Single choice</option><option>Multiple choice</option><option>Numeric ± tolerance</option><option>Short answer</option></select></div>
+    <div class="field"><label>Question text</label><input class="inp" value="Name the heuristic that keeps question + answer on one surface."></div>
+    <div class="field"><label>Accepted answer (case-insensitive)</label><input class="inp" value="consistency … (accept: consistency / visibility of system status)"></div>
+    <div class="field"><label>Points</label><input class="inp" value="1"></div>
+    <div class="warnbox">Preview of the student experience is below this form — same one-surface player you saw in the
+    proposal sketches (G1).</div>
+    <div class="reveal">
+      <button onclick="show('t1-questions')">← Back to questions</button>
+      <button class="btn ok" onclick="show('t1-questions')">Save question</button>
+    </div>
+  </section>
+
+  <!-- ========================================================= T1 POLICY -->
+  <section class="screen" id="t1-policy">
+    <p class="kicker">Task 1 · step 4/7</p>
+    <h1>Behaviour settings & integrity policy</h1>
+    <table>
+      <tr><th>Setting</th><th>Value</th><th rowspan="5">(wireframe)</th></tr>
+      <tr><td>Duration limit</td><td>10 min</td></tr>
+      <tr><td>Attempts allowed</td><td>1</td></tr>
+      <tr><td>Scores shown</td><td>At release / Immediate / Never</td></tr>
+      <tr><td>Shuffle</td><td>Questions ✓ · Options ✓</td></tr>
+    </table>
+    <h2>Integrity policy — choose how the system behaves, in words students will read</h2>
+    <div class="card cardrow">
+      <div><strong>Off</strong> — “No focus-monitoring events are collected during your attempt. Your answers are the only recorded data.”</div>
+      <span class="tag">chosen</span>
+    </div>
+    <div class="card cardrow">
+      <div><strong>Warn</strong> — “If a trigger happens you are warned. A warning is recorded but it never locks your attempt by itself.”</div>
+      <span class="tag">chosen</span>
+    </div>
+    <div class="card cardrow">
+      <div><strong>Strict</strong> — “If the trigger happens, the server immediately locks your attempt. Your acknowledged answers and the
+      remaining deadline are preserved. You can resume after your instructor reviews and reinstates it.”</div>
+      <span class="tag">chosen</span>
+    </div>
+    <div class="warnbox"><b>Sticky note — why these strings:</b> the instructor writes the student-facing truth once. The
+    identical text is shown on Task 2’s preflight card and on the lock screen, so there is no gap between “rule” and “event” (G3).</div>
+    <div class="reveal">
+      <button onclick="show('t1-questions')">← Back</button>
+      <button class="btn primary" onclick="show('t1-preview')">Preview as a student →</button>
+    </div>
+  </section>
+
+  <!-- ========================================================= T1 PREVIEW -->
+  <section class="screen" id="t1-preview">
+    <p class="kicker">Task 1 · step 5/7</p>
+    <h1>Preview — exactly what a student sees</h1>
+    <p class="sub">This reuses the <b>same player component</b> as Task 2; nothing is swapped for staff. Timer is a placeholder.</p>
+    <div class="player-head">HCI checkpoint 1 — visibility of system status <span class="timer">⏱ 09:21</span></div>
+    <div class="save pending">◇ <span class="pending-dot">●</span> Saving…</div>
+    <div class="q">
+      <p><b>Q2 · multiple · 2 pts</b><br>Select the states a student should be able to distinguish (G2).</p>
+      <div class="opt sel"><input type="checkbox" checked> Pending</div>
+      <div class="opt sel"><input type="checkbox" checked> Saving</div>
+      <div class="opt sel"><input type="checkbox" checked> Saved</div>
+      <div class="opt sel"><input type="checkbox" checked> Submitted</div>
+    </div>
+    <div class="note">Any problem → back to the editor. Otherwise publish.</div>
+    <div class="reveal" style="justify-content:space-between">
+      <button onclick="show('t1-policy')">← Edit again</button>
+      <button class="btn primary" onclick="show('t1-published')">Looks good — Publish →</button>
+    </div>
+  </section>
+
+  <!-- ========================================================= T1 PUBLISHED -->
+  <section class="screen" id="t1-published">
+    <p class="kicker">Task 1 · step 6/7</p>
+    <h1>Published — this version is frozen</h1>
+    <div class="okbox">✓ Duplicate of the live rules: <b>published v1</b> is protected. The editor now only edits a
+    <em>new draft v2</em> — editing can never mutate what students are taking (G4).</div>
+    <div class="card cardrow">
+      <div><strong>HCI checkpoint 1</strong> <span class="tag ok">published v1</span> <span class="tag">1 attempt</span>
+        <span class="tag">10 min</span> <span class="tag warn">strict</span></div>
+      <button class="btn" onclick="show('t2-preflight')">Open preflight (student view)</button>
+    </div>
+    <div class="warnbox">Editing a published quiz → the system clones it to <b>draft v2</b> and shows “you are editing a new
+    draft; v1 keeps running”. Publishing v2 switches students over atomically.</div>
+    <div class="reveal">
+      <button onclick="show('t1-preview')">← Back</button>
+      <button class="btn primary" onclick="show('t1-incidents')">Next: incidents after Task 2 →</button>
+    </div>
+  </section>
+
+  <!-- ========================================================= T1 INCIDENTS -->
+  <section class="screen" id="t1-incidents">
+    <p class="kicker">Task 1 · step 7/7 (post Task 2)</p>
+    <h1>Incidents & review — “why did this student get locked?”</h1>
+    <p class="sub">Fed by Task 2’s strict-policy variant. Every event, every decision, with a reason.</p>
+    <div class="card cardrow">
+      <div><b>HCI checkpoint 1 · attempt #7</b> <span class="tag warn">locked</span><br>
+        <span style="font-size:13px">Meera Nair · focus_exit “Window lost focus” · 3 events · 4/4 answers saved</span></div>
+      <button class="btn" onclick="show('t2-locked')">Review →</button>
+    </div>
+    <table>
+      <tr><th>Time</th><th>Event</th><th>Detail</th></tr>
+      <tr><td>06:14:38</td><td><code>focus_exit</code></td><td>Window lost focus (client)</td></tr>
+      <tr><td>06:14:38</td><td><code>locked</code></td><td>Trigger fired the strict policy. Deadline preserved, answers kept. (server)</td></tr>
+      <tr><td>06:14:40</td><td><code>review_submitted</code></td><td>“Single tab switch; allow grading from saved answers.” (instructor)</td></tr>
+    </table>
+    <div class="note"><b>Sticky note — why this page exists (G3):</b> integrity decisions are not a black box. The reviewer sees
+    the student’s acknowledged answers and each event, then chooses <em>Reinstate &amp; re-enter</em>,
+    <em>Grade &amp; submit from saved answers</em>, or <em>Confirm lock</em> — and must give a reason. The reason is appended to the audit trail.</div>
+    <div class="reveal">
+      <button onclick="show('t1-published')">← Back</button>
+      <button class="btn primary" onclick="show('t2-preflight')">Follow to Task 2 preflight →</button>
+    </div>
+  </section>
+
+  <!-- ========================================================= T2 PREFLIGHT -->
+  <section class="screen" id="t2-preflight">
+    <p class="kicker">Task 2 · step 1/6</p>
+    <h1>Preflight — read before you start</h1>
+    <div class="card">
+      <div class="cardrow"><h1 style="font-size:1.1rem">HCI checkpoint 1</h1><span class="tag ok">published v1</span></div>
+      <p class="sub" style="margin-top:.4rem">Answer all questions. Answers are saved automatically; check the save indicator. Your receipt confirms submission.</p>
+      <ul class="tight">
+        <li>Duration <b>10 min</b> · attempts left <b>1 of 1</b> · deadline <b>2026-10-02 17:00</b></li>
+        <li>4 questions · 5 points total</li>
+        <li>Questions & options shuffled per student</li>
+      </ul>
+      <div class="badbox"><b>Integrity policy: Strict.</b> If a focus-leave trigger happens, the server immediately locks your
+      attempt. Your acknowledged answers and remaining deadline are preserved. You can resume only after your instructor reviews
+      and reinstates it. Contact your instructor/TA for a review.</div>
+      <p style="font-size:13px;color:var(--mut)">This is the exact policy the instructor configured. You are told the rule, the consequence,
+      and the remedy <em>before</em> you commit (G3).</p>
+    </div>
+    <div class="reveal">
+      <button onclick="show('t1-published')">← Back (staff)</button>
+      <button class="btn primary" onclick="show('t2-player')">Start attempt →</button>
+    </div>
+  </section>
+
+  <!-- ========================================================= T2 PLAYER -->
+  <section class="screen" id="t2-player">
+    <p class="kicker">Task 2 · step 2/6</p>
+    <h1>Player — question and answer on one surface (G1)</h1>
+    <div class="player-head">HCI checkpoint 1 <span class="tag warn">strict</span> <span class="timer">⏱ 08:41</span></div>
+    <div class="save ok">✓ Saved 06:14:31</div>
+    <p style="font-size:13px;color:var(--mut)">Status is symbol + text + time — never colour alone (G2, accessibility).</p>
+
+    <div class="q">
+      <div class="cardrow"><b>Q2 · multiple · 2 pts</b><span class="tag accent">a.k. set</span></div>
+      <p>Select the states a student should be able to distinguish (G2).</p>
+      <div class="opt sel"><input type="checkbox" checked> Pending</div>
+      <div class="opt sel"><input type="checkbox" checked> Saving</div>
+      <div class="opt sel"><input type="checkbox" checked> Saved</div>
+      <div class="opt sel"><input type="checkbox" checked> Submitted</div>
+    </div>
+
+    <div class="dots">
+      <span class="dot answered">1</span><span class="dot answered cur">2</span><span class="dot answered">3</span><span class="dot">4</span>
+    </div>
+    <div class="foot">
+      <button class="btn" onclick="show('t2-saving')">← Previous</button>
+      <button class="btn" onclick="show('t2-saving')">Save now</button>
+      <button class="btn primary" onclick="show('t2-offline')">Network drop demo →</button>
+    </div>
+    <div class="note"><b>Sticky note — why dots are answered/current, not colour-coded results:</b> answered state is shown as
+    solid fill + number (G2). “Save now” is an explicit affordance on top of auto-save.</div>
+  </section>
+
+  <!-- ========================================================= T2 SAVING -->
+  <section class="screen" id="t2-saving">
+    <p class="kicker">Task 2 · step 3/6</p>
+    <h1>Save states — the G2 story</h1>
+    <div class="player-head">HCI checkpoint 1 <span class="tag warn">strict</span> <span class="timer">⏱ 07:59</span></div>
+    <div class="save pending">◇ <span class="pending-dot">●</span> Saving…</div>
+    <div class="q">
+      <div class="cardrow"><b>Q4 · short · 1 pt</b></div>
+      <p>Name the heuristic that keeps question + answer on one surface.</p>
+      <input class="inp" value="consisten…">
+      <p style="font-size:12.5px;color:var(--mut)">Edit advances a <b>revision counter</b> (shown in the audit trail, not the UI) so the
+      client and server can reconcile out-of-order writes.</p>
+    </div>
+    <div class="note"><b>Sticky note — why three visible states matter:</b> “pending” (typed, not yet confirmed) vs “saving”
+    (request in flight) vs “saved” (server ack with time). The transition <em>saving → saved</em> is the student’s trust anchor.</div>
+    <div class="reveal">
+      <button onclick="show('t2-player')">← Player</button>
+      <button class="btn primary" onclick="show('t2-offline')">Show network drop →</button>
+    </div>
+  </section>
+
+  <!-- ========================================================= T2 OFFLINE -->
+  <section class="screen" id="t2-offline">
+    <p class="kicker">Task 2 · step 3b/6</p>
+    <h1>Network drop — nothing is lost (G2)</h1>
+    <div class="player-head">HCI checkpoint 1 <span class="tag warn">strict</span> <span class="timer">⏱ 07:12</span></div>
+    <div class="save error">⚠ Save failed — retrying…</div>
+    <div class="q">
+      <div class="cardrow"><b>Q4 · short · 1 pt</b></div>
+      <input class="inp" value="consistency">
+      <p style="font-size:12.5px;color:var(--mut)">The queued edit stays <b>pending</b> locally. It is flushed on the next save tick or the
+      next answer change — nothing acknowledged by the server is ever re-requested (idempotent via revision).</p>
+    </div>
+    <div class="warnbox"><b>Sticky note — what “nothing is lost” means:</b> the <em>acknowledged</em> state is the contract.
+      If the app dies here, reopening shows exactly the server’s last-acknowledged snapshot.</div>
+    <div class="reveal">
+      <button onclick="show('t2-saving')">← Back</button>
+      <button class="btn primary" onclick="show('t2-receipt')">Recover → submit →</button>
+    </div>
+  </section>
+
+  <!-- ========================================================= T2 LOCKED -->
+  <section class="screen" id="t2-locked">
+    <p class="kicker">Task 2 · step 5/6 (strict variant)</p>
+    <h1>⚠ Attempt locked — explained, not silent (G3)</h1>
+    <div class="badbox">
+      <p style="margin:0"><b>Why:</b> the strict policy triggered when <code>focus_exit</code> happened (you switched away from the quiz window).</p>
+      <ul class="tight" style="margin:.5rem 0 0">
+        <li>Your <b>acknowledged answers are preserved</b> (4 of 4 saved).</li>
+        <li>The <b>deadline keeps running</b> — you can resume exactly where you left off.</li>
+        <li>This attempt needs an instructor/TA review before you can re-enter.</li>
+      </ul>
+    </div>
+    <div class="note"><b>Sticky note — why this screen:</b> the student learns the trigger, what survived, and the exact remedy.
+    No mystery disqualification. The same case appears in Task 1’s Incidents inbox.</div>
+    <div class="reveal" style="justify-content:space-between">
+      <button onclick="show('t2-offline')">← Back</button>
+      <button class="btn" onclick="show('t1-incidents')">Show instructor review side →</button>
+      <button class="btn primary" onclick="show('t2-receipt')">(Reinstated) → receipt</button>
+    </div>
+  </section>
+
+  <!-- ========================================================= T2 RECEIPT -->
+  <section class="screen" id="t2-receipt">
+    <p class="kicker">Task 2 · step 5/6</p>
+    <div class="receipt">
+      <p class="kicker">Submission confirmed by the server</p>
+      <div class="id">receipt: <b>7-9f2c1a4b8e007fd2a20b11</b></div>
+      <p class="sub" style="margin-top:.8rem">Answers acknowledged: <b>4 of 4</b> · submitted 06:15:02 · score shown
+      “at release” (not yet)</p>
+      <div class="okbox">If the quiz is set to <b>immediate</b>, your score appears here on the receipt. For
+      <b>release</b>, it appears on the results page when the instructor publishes it (or on CSV export).</div>
+    </div>
+    <div class="reveal">
+      <button onclick="show('t2-offline')">← Back</button>
+      <button class="btn primary" onclick="show('t2-result')">See result breakdown →</button>
+    </div>
+  </section>
+
+  <!-- ========================================================= T2 RESULT -->
+  <section class="screen" id="t2-result">
+    <p class="kicker">Task 2 · step 6/6</p>
+    <h1>Result breakdown (after release)</h1>
+    <p class="sub"><b>Score 2 / 5 · key: released</b> — per-question, your answer vs correct answer.</p>
+    <table>
+      <tr><th>Q</th><th>Type</th><th>Your answer</th><th>Correct</th><th>Earned</th></tr>
+      <tr><td>1</td><td>single</td><td>Visibility of system status</td><td>Visibility of system status</td><td><b>1/1</b></td></tr>
+      <tr><td>2</td><td>multiple</td><td>[1,2]</td><td>[0,1,2,3]</td><td>0/2</td></tr>
+      <tr><td>3</td><td>numeric</td><td>70</td><td>70 (±0)</td><td><b>1/1</b></td></tr>
+      <tr><td>4</td><td>short</td><td>“visibility”</td><td>“consistency”</td><td>0/1</td></tr>
+    </table>
+    <div class="note"><b>Sticky note — why answer key is a separate toggle:</b> staff can release scores now and the key later;
+    the student’s “your answer vs earned” is always shown, the correct answer only after key release.</div>
+    <div class="reveal">
+      <button onclick="show('t2-receipt')">← Back</button>
+      <button onclick="show('home')">Done — back to home</button>
+    </div>
+  </section>
+
+</div>
+
+<script>
+  function show(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    const el = document.getElementById(id);
+    if (el) el.classList.add('active');
+    window.scrollTo(0, 0);
+    document.querySelectorAll('.tasknav button').forEach(b => b.classList.remove('active'));
+  }
+  show('home');
+</script>
+</body>
+</html>
