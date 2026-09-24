@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth, AppError } from '../auth.js';
 import type { AuthedRequest } from '../auth.js';
+import { assertInstructor, assertStaff, writeAudit } from '../authz.js';
 import {
   resultRepo,
   attemptRepo,
@@ -87,12 +88,15 @@ resultsRouter.get('/mine', (req: AuthedRequest, res) => {
 resultsRouter.post('/quiz/:quizVersionId/release', (req: AuthedRequest, res) => {
   const version = quizVersionRepo.get(Number(req.params.quizVersionId));
   if (!version) throw new AppError(404, 'Quiz version not found.');
-  const role = courseRepo.courseRole(version.course_id, req.userId as number);
-  if ((!role || role === 'student') && req.userRole !== 'admin') {
-    throw new AppError(403, 'Only course staff can release results.');
-  }
+  assertInstructor(req, version.course_id);
   const answerKey = Boolean((req.body ?? {}).answer_key ?? false);
   const n = resultRepo.releaseAllForVersion(version.id, answerKey);
+  writeAudit(req, {
+    action: 'results.release',
+    course_id: version.course_id,
+    target: 'version:' + version.id,
+    after: { answer_key: answerKey, released: n },
+  });
   res.json({ ok: true, released: n });
 });
 
@@ -102,10 +106,7 @@ resultsRouter.put('/attempt/:attemptId', (req: AuthedRequest, res) => {
   if (!attempt) throw new AppError(404, 'Attempt not found.');
   const version = quizVersionRepo.get(attempt.quiz_version_id);
   if (!version) throw new AppError(404, 'Quiz version not found.');
-  const role = courseRepo.courseRole(version.course_id, req.userId as number);
-  if ((!role || role === 'student') && req.userRole !== 'admin') {
-    throw new AppError(403, 'Only course staff can manage results.');
-  }
+  assertInstructor(req, version.course_id);
   const result = resultRepo.getByAttempt(attempt.id);
   if (!result) throw new AppError(409, 'Attempt has not been graded yet.');
   const { release, answer_key } = req.body ?? {};
@@ -118,6 +119,12 @@ resultsRouter.put('/attempt/:attemptId', (req: AuthedRequest, res) => {
   if (typeof answer_key === 'boolean') {
     resultRepo.setKeyReleased(attempt.id, answer_key ? 1 : 0);
   }
+  writeAudit(req, {
+    action: 'results.attempt.update',
+    course_id: version.course_id,
+    target: 'attempt:' + attempt.id,
+    after: req.body,
+  });
   res.json({ ok: true });
 });
 
@@ -127,12 +134,8 @@ resultsRouter.get('/attempt/:attemptId', (req: AuthedRequest, res) => {
   const isOwner = attempt.user_id === (req.userId as number);
   const version = quizVersionRepo.get(attempt.quiz_version_id);
   if (!isOwner) {
-    const role = version
-      ? courseRepo.courseRole(version.course_id, req.userId as number)
-      : null;
-    if ((!role || role === 'student') && req.userRole !== 'admin') {
-      throw new AppError(403, 'Not your attempt.');
-    }
+    if (!version) throw new AppError(403, 'Not your attempt.');
+    assertStaff(req, version.course_id);
   }
   const result = resultRepo.getByAttempt(attempt.id);
   if (!result || !result.released) {
@@ -155,10 +158,7 @@ resultsRouter.get('/attempt/:attemptId', (req: AuthedRequest, res) => {
 resultsRouter.get('/quiz/:quizVersionId/export.csv', (req: AuthedRequest, res) => {
   const version = quizVersionRepo.get(Number(req.params.quizVersionId));
   if (!version) throw new AppError(404, 'Quiz version not found.');
-  const role = courseRepo.courseRole(version.course_id, req.userId as number);
-  if ((!role || role === 'student') && req.userRole !== 'admin') {
-    throw new AppError(403, 'Only course staff can export results.');
-  }
+  assertInstructor(req, version.course_id);
   const rows = attemptRepo.listForVersion(version.id).filter((a) => a.status === 'submitted' || a.status === 'expired');
   const csvRows = [
     ['attempt_id', 'student_id', 'status', 'started_at', 'submitted_at', 'score', 'max_score', 'receipt'],

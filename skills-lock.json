@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "frontend-design": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "skillPath": "skills/frontend-design/SKILL.md",
+      "computedHash": "89496d5dd00f4810205f351759594fc2742bf8eea85a2f2b2d1de59f4bd91576"
+    },
+    "frontend-god-mode": {
+      "source": "Shawnchee/frontend-god-mode",
+      "sourceType": "github",
+      "skillPath": "frontend-god-mode/SKILL.md",
+      "computedHash": "2bc68d33648308957ff29adff67954c0d78ad0804c72c03c1f43cb33def2090b"
+    }
+  }
+}

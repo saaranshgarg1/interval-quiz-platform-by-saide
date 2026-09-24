@@ -1,8 +1,35 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
+import { motion, useReducedMotion } from 'framer-motion';
+import {
+  CheckCircle2,
+  Clock,
+  Save,
+  AlertTriangle,
+  Lock,
+  ChevronLeft,
+  ChevronRight,
+  Flag,
+  FlagOff,
+} from 'lucide-react';
 import { api, ApiError } from '../api';
 import type { AttemptView, SubmitResult } from '../types';
-import { Pill, IconCheck, IconClock, IconSave, IconAlert, IconLock } from '../components/ui';
+import { Button } from '../components/ui/button';
+import { Badge } from '../components/ui/badge';
+import { Progress } from '../components/ui/progress';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '../components/ui/card';
+import {
+  AlertDialog,
+  AlertDialogTrigger,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from '../components/ui/alert-dialog';
+import { Input } from '../components/ui/input';
 import { RichText } from '../components/RichText';
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error';
@@ -27,6 +54,8 @@ export function AttemptPage() {
   const [expiredScreen, setExpiredScreen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState<number>(Date.now());
+  const [flagged, setFlagged] = useState<Record<number, boolean>>({});
+  const [submitDialogOpen, setSubmitDialogOpen] = useState(false);
 
   const localRef = useRef(answers);
   localRef.current = answers;
@@ -223,18 +252,27 @@ export function AttemptPage() {
 
   const [policyMsg, setPolicyMsg] = useState<string | null>(null);
 
+  // ---- keyboard navigation ------------------------------------------------
+  useEffect(() => {
+    if (locked || expiredScreen || submitResult) return;
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (e.target instanceof HTMLElement && e.target.isContentEditable) return;
+      if (e.key === 'ArrowLeft' && current > 0) {
+        e.preventDefault();
+        setCurrent((c) => c - 1);
+      } else if (e.key === 'ArrowRight' && current < questions.length - 1) {
+        e.preventDefault();
+        setCurrent((c) => c + 1);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [current, questions.length, locked, expiredScreen, submitResult]);
+
   // ---- submit -------------------------------------------------------------
   const submit = async () => {
-    const unanswered = questions.filter((qs) => {
-      const a = answers[qs.id];
-      return !a || isEmptyAnswer(qs.qtype, a.value);
-    }).length;
-    const ok = window.confirm(
-      unanswered > 0
-        ? `You have not answered ${unanswered} question(s). Submit anyway? Answers cannot be changed after submission.`
-        : 'Submit your answers now? This is final.',
-    );
-    if (!ok) return;
     setError(null);
     try {
       await drain();
@@ -257,32 +295,38 @@ export function AttemptPage() {
 
   // ---- render --------------------------------------------------------------
   if (error && !view) return <div className="banner error">{error}</div>;
-  if (!view || !activeMeta) return <p className="muted">Loading attempt…</p>;
+  if (!view || !activeMeta) return <p className="muted small">Loading attempt…</p>;
 
   if (locked) {
     return (
       <div className="player">
-        <div className="card" style={{ textAlign: 'center', marginTop: '2rem', padding: '2rem 1.5rem' }}>
-          <IconLock />
-          <h1>Attempt locked</h1>
-          <p className="muted">
-            The quiz’s strict policy triggered because you left the quiz window. Your acknowledged answers are preserved and
-            the deadline continues to run. You can resume only after an instructor or TA reviews and reinstates the attempt.
-          </p>
-          <div className="banner warn" style={{ textAlign: 'left' }}>
-            <strong>What happens next:</strong>
-            <ol className="small" style={{ margin: '0.4rem 0 0' }}>
-              <li>Your instructor sees this attempt under <strong>Incidents</strong>.</li>
-              <li>They review the recorded events and your saved answers.</li>
-              <li>If they reinstate the attempt, you can continue exactly where you left off.</li>
-            </ol>
-          </div>
-          {policyMsg && <p className="small muted">{policyMsg}</p>}
-          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', marginTop: '1rem' }}>
-            <button className="btn secondary" onClick={() => navigate(-1)}>Back</button>
-            <button className="btn secondary" onClick={() => void load()}>Check status</button>
-          </div>
-        </div>
+        <Card className="mx-auto max-w-md text-center">
+          <CardHeader>
+            <div className="mb-3 flex justify-center">
+              <Lock className="size-10 text-destructive" aria-hidden="true" />
+            </div>
+            <CardTitle>Attempt locked</CardTitle>
+            <CardDescription>
+              The quiz's strict policy triggered because you left the quiz window. Your acknowledged answers are preserved and
+              the deadline continues to run. You can resume only after an instructor or TA reviews and reinstates the attempt.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="mb-4 space-y-2 text-left">
+              <p className="text-sm font-semibold">What happens next:</p>
+              <ol className="list-decimal list-inside text-sm text-muted-foreground space-y-1">
+                <li>Your instructor sees this attempt under <strong>Incidents</strong>.</li>
+                <li>They review the recorded events and your saved answers.</li>
+                <li>If they reinstate the attempt, you can continue exactly where you left off.</li>
+              </ol>
+            </div>
+            {policyMsg && <p className="text-xs text-muted-foreground">{policyMsg}</p>}
+          </CardContent>
+          <CardFooter className="flex justify-center gap-3">
+            <Button variant="secondary" size="sm" onClick={() => navigate(-1)}>Back</Button>
+            <Button variant="secondary" size="sm" onClick={() => void load()}>Check status</Button>
+          </CardFooter>
+        </Card>
       </div>
     );
   }
@@ -290,24 +334,32 @@ export function AttemptPage() {
   if (expiredScreen || activeMeta.status === 'expired') {
     return (
       <div className="player">
-        <div className="card" style={{ textAlign: 'center', marginTop: '2rem', padding: '2rem 1.5rem' }}>
-          <IconAlert />
-          <h1>Attempt expired</h1>
-          <p className="muted">
-            The deadline passed. Your last acknowledged answers were graded as-is.
-          </p>
-          {activeMeta.receipt && (
-            <p className="receipt-id mono">Receipt: {activeMeta.receipt}</p>
-          )}
-          <div style={{ marginTop: '1rem', display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
-            <button className="btn secondary" onClick={() => navigate(-1)}>Back</button>
+        <Card className="mx-auto max-w-md text-center">
+          <CardHeader>
+            <div className="mb-3 flex justify-center">
+              <AlertTriangle className="size-10 text-warning" aria-hidden="true" />
+            </div>
+            <CardTitle>Attempt expired</CardTitle>
+            <CardDescription>
+              The deadline passed. Your last acknowledged answers were graded as-is.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
             {activeMeta.receipt && (
-              <button className="btn secondary" onClick={() => navigate(`/results/attempt/${activeMeta.id}`)}>
-                {view.quiz.integrity_policy ? 'View any released result' : 'View result'}
-              </button>
+              <p className="font-mono text-sm break-all bg-muted px-3 py-1.5 rounded-[var(--radius-md)]">
+                Receipt: {activeMeta.receipt}
+              </p>
             )}
-          </div>
-        </div>
+          </CardContent>
+          <CardFooter className="flex justify-center gap-3">
+            <Button variant="secondary" size="sm" onClick={() => navigate(-1)}>Back</Button>
+            {activeMeta.receipt && (
+              <Button variant="secondary" size="sm" onClick={() => navigate(`/results/attempt/${activeMeta.id}`)}>
+                {view.quiz.integrity_policy ? 'View any released result' : 'View result'}
+              </Button>
+            )}
+          </CardFooter>
+        </Card>
       </div>
     );
   }
@@ -316,33 +368,37 @@ export function AttemptPage() {
     const canView = activeMeta.score != null || activeMeta.receipt != null;
     return (
       <div className="player">
-        <div className="card receipt">
-          <IconCheck />
-          <h1>Submitted</h1>
-          <p className="small muted">Your answers were accepted by the server.</p>
-          {activeMeta.receipt && (
-            <p className="receipt-id mono" role="status">
-              Receipt: <strong>{activeMeta.receipt}</strong>
-            </p>
-          )}
-          <p className="small muted">
-            Acknowledged answers: <strong>{submitResult.acknowledged_answers}</strong>
-            {submitResult.policy.recorded > 0 ? ` · policy events recorded: ${submitResult.policy.recorded}` : ''}
-          </p>
-          {activeMeta.score != null && (
-            <p>
-              <Pill tone="ok" symbol="✓">
-                Score: {activeMeta.score}/{activeMeta.max_score}
-              </Pill>
-            </p>
-          )}
-          {canView && (
-            <div style={{ marginTop: '1rem', display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
-              <button className="btn" onClick={() => navigate(`/results/attempt/${activeMeta.id}`)}>View result</button>
-              <button className="btn secondary" onClick={() => navigate('/')}>Back to home</button>
+        <Card className="mx-auto max-w-md text-center">
+          <CardHeader>
+            <div className="mb-3 flex justify-center">
+              <CheckCircle2 className="size-10 text-success" aria-hidden="true" />
             </div>
+            <CardTitle>Submitted</CardTitle>
+            <CardDescription>Your answers were accepted by the server.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {activeMeta.receipt && (
+              <p className="font-mono text-sm break-all bg-muted px-3 py-1.5 rounded-[var(--radius-md)]" role="status">
+                Receipt: <strong>{activeMeta.receipt}</strong>
+              </p>
+            )}
+            <p className="text-sm text-muted-foreground">
+              Acknowledged answers: <strong>{submitResult.acknowledged_answers}</strong>
+              {submitResult.policy.recorded > 0 ? ` · policy events recorded: ${submitResult.policy.recorded}` : ''}
+            </p>
+            {activeMeta.score != null && (
+              <Badge variant="success" className="mx-auto">
+                Score: {activeMeta.score}/{activeMeta.max_score}
+              </Badge>
+            )}
+          </CardContent>
+          {canView && (
+            <CardFooter className="flex justify-center gap-3">
+              <Button size="sm" onClick={() => navigate(`/results/attempt/${activeMeta.id}`)}>View result</Button>
+              <Button variant="secondary" size="sm" onClick={() => navigate('/')}>Back to home</Button>
+            </CardFooter>
           )}
-        </div>
+        </Card>
       </div>
     );
   }
@@ -354,23 +410,33 @@ export function AttemptPage() {
   }).length;
 
   const timerWarn = msLeft != null && msLeft < 60_000;
+  const reduceMotion = useReducedMotion();
 
   return (
     <div className="player">
+      {/* ---- header ---- */}
       <div className="player-header">
-        <div className="grow">
-          <strong>{view.quiz.title}</strong>
-          <div className="muted small">
+        <div className="grow min-w-0">
+          <p className="font-display text-lg font-semibold text-foreground">{view.quiz.title}</p>
+          <p className="text-sm text-muted-foreground">
             Q {current + 1} of {questions.length} · {answeredCount} answered
-          </div>
+          </p>
         </div>
-        <div className="progress-track" aria-hidden="true">
-          <div className="progress-fill" style={{ width: `${Math.round(((current + 1) / questions.length) * 100)}%` }} />
-        </div>
+        <Progress
+          value={Math.round(((current + 1) / questions.length) * 100)}
+          className="w-32 shrink-0"
+          aria-label={`Question ${current + 1} of ${questions.length}`}
+        />
         {msLeft != null && (
-          <span className={`timer${timerWarn ? ' warn' : ''}`} role="timer" aria-label="time remaining">
-            <IconClock /> {formatMs(msLeft)}
-          </span>
+          <Badge
+            variant={timerWarn ? 'destructive' : 'secondary'}
+            className="font-mono tabular-nums"
+            role="timer"
+            aria-label="time remaining"
+          >
+            <Clock className="mr-1 size-3" aria-hidden="true" />
+            {formatMs(msLeft)}
+          </Badge>
         )}
       </div>
 
@@ -378,68 +444,155 @@ export function AttemptPage() {
 
       {policyMsg && <div className="banner warn small">{policyMsg}</div>}
 
-      <div className="question-card">
-        <div className="card-row" style={{ marginBottom: '0.5rem' }}>
-          <Pill tone="neutral" symbol="·">{q.qtype.replace('_', ' ')}</Pill>
-          <span className="muted small">{q.points} pt</span>
-        </div>
-        <div style={{ fontSize: '1.05rem', fontWeight: 600, margin: '0 0 0.75rem' }}>
-          <RichText content={q.text} />
-        </div>
-        <AnswerControl
-          qtype={q.qtype}
-          options={q.options}
-          value={answers[q.id]?.value}
-          onChange={(v) => setAnswer(q.id, v)}
-        />
-      </div>
+      {/* ---- question card ---- */}
+      <motion.div
+        key={q.id}
+        initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+        animate={reduceMotion ? false : { opacity: 1, y: 0 }}
+        exit={reduceMotion ? undefined : { opacity: 0, y: -8 }}
+        transition={{ duration: 0.2, ease: 'easeOut' }}
+      >
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <Badge variant="secondary" className="capitalize">
+                {q.qtype.replace('_', ' ')}
+              </Badge>
+              <Badge variant="secondary">{q.points} pt</Badge>
+            </div>
+            <CardTitle className="mt-2">
+              <RichText content={q.text} />
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <AnswerControl
+              qtype={q.qtype}
+              options={q.options}
+              value={answers[q.id]?.value}
+              onChange={(v) => setAnswer(q.id, v)}
+            />
+          </CardContent>
+        </Card>
+      </motion.div>
 
+      {/* ---- question pager ---- */}
       <div className="question-pager" role="tablist" aria-label="Questions">
         {questions.map((qs, i) => {
           const a = answers[qs.id];
+          const isAnswered = a != null && !isEmptyAnswer(qs.qtype, a.value);
+          const isFlagged = !!flagged[qs.id];
+          const isCurrent = i === current;
           return (
-            <button
-              key={qs.id}
-              role="tab"
-              aria-selected={i === current}
-              className={`q-dot${i === current ? ' current' : ''}${a && !isEmptyAnswer(qs.qtype, a.value) ? ' answered' : ''}`}
-              onClick={() => setCurrent(i)}
-              title={`Question ${i + 1}`}
-            >
-              {i + 1}
-            </button>
+            <div key={qs.id} className="relative flex items-center">
+              <button
+                role="tab"
+                aria-selected={isCurrent}
+                aria-label={`Question ${i + 1}${isFlagged ? ', flagged' : ''}`}
+                className={`relative q-dot ${isCurrent ? 'current' : ''} ${isAnswered ? 'answered' : ''} ${isFlagged ? 'flagged' : ''}`}
+                onClick={() => setCurrent(i)}
+                title={`Question ${i + 1}`}
+              >
+                {i + 1}
+              </button>
+              <button
+                type="button"
+                aria-label={isFlagged ? `Unflag question ${i + 1}` : `Flag question ${i + 1} for review`}
+                title={isFlagged ? 'Unflag for review' : 'Flag for review'}
+                className="absolute -top-1 -right-1 rounded-full p-0.5 hover:bg-muted"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFlagged((prev) => ({ ...prev, [qs.id]: !prev[qs.id] }));
+                }}
+              >
+                {isFlagged ? (
+                  <Flag className="size-3 text-warning" aria-hidden="true" />
+                ) : (
+                  <FlagOff className="size-3 text-muted-foreground/50" aria-hidden="true" />
+                )}
+              </button>
+            </div>
           );
         })}
       </div>
 
-      <div style={{ marginTop: '1.25rem', display: 'flex', gap: '0.75rem', justifyContent: 'space-between', flexWrap: 'wrap' }}>
-        <button className="btn secondary" disabled={current === 0} onClick={() => setCurrent((c) => c - 1)}>
-          ← Previous
-        </button>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <button className="btn secondary" onClick={() => void drain()} disabled={!dirty}>
-            <IconSave /> Save now
-          </button>
-          <button className="btn" onClick={() => void submit()} disabled={questions.length === 0}>
-            Submit attempt
-          </button>
+      {/* ---- navigation + actions ---- */}
+      <div className="mt-5 flex items-center justify-between flex-wrap gap-3">
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={current === 0}
+          onClick={() => setCurrent((c) => c - 1)}
+        >
+          <ChevronLeft className="size-4" aria-hidden="true" />
+          Previous
+        </Button>
+        <div className="flex items-center gap-3">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => void drain()}
+            disabled={!dirty}
+          >
+            <Save className="size-4" aria-hidden="true" />
+            Save now
+          </Button>
+          <AlertDialog open={submitDialogOpen} onOpenChange={setSubmitDialogOpen}>
+            <AlertDialogTrigger asChild>
+              <Button size="sm" disabled={questions.length === 0}>
+                Submit attempt
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Submit attempt?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {(() => {
+                    const unanswered = questions.filter((qs) => {
+                      const a = answers[qs.id];
+                      return !a || isEmptyAnswer(qs.qtype, a.value);
+                    }).length;
+                    return unanswered > 0
+                      ? `You have not answered ${unanswered} question(s). Submit anyway? Answers cannot be changed after submission.`
+                      : 'Submit your answers now? This is final.';
+                  })()}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={async () => {
+                    setSubmitDialogOpen(false);
+                    await submit();
+                  }}
+                >
+                  Submit
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
         {current < questions.length - 1 && (
-          <button className="btn secondary" onClick={() => setCurrent((c) => c + 1)}>
-            Next →
-          </button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setCurrent((c) => c + 1)}
+          >
+            Next <ChevronRight className="size-4" aria-hidden="true" />
+          </Button>
         )}
       </div>
 
       {msLeft != null && msLeft <= 0 && (
-        <div className="banner warn" style={{ marginTop: '1rem' }}>
+        <div className="banner warn small mt-4">
           The deadline has passed. Your next save or submission will finalize this attempt as expired.
         </div>
       )}
 
-      <p className="muted small" style={{ marginTop: '1rem' }}>
+      <p className="muted small mt-4">
         Your answers are sent to the server and acknowledged. If the network drops, your last acknowledged state is preserved.
-        <Link to={`/quizzes/${view.quiz.id}`} style={{ display: 'block', marginTop: '0.3rem' }}>← Back to quiz</Link>
+        <Link to={`/quizzes/${view.quiz.id}`} className="block mt-1">
+          ← Back to quiz
+        </Link>
       </p>
     </div>
   );
@@ -464,25 +617,20 @@ function formatMs(ms: number): string {
 
 function SaveIndicator({ state, lastSavedAt }: { state: SaveState; lastSavedAt: string | null }) {
   let label = 'All changes saved';
-  let tone = 'saved';
-  let symbol: 'check' | 'clock' | 'alert' = 'check';
+  let icon: React.ReactNode = <CheckCircle2 className="size-4 text-success" aria-hidden="true" />;
   if (state === 'saving') {
     label = 'Saving…';
-    tone = 'saving';
-    symbol = 'clock';
+    icon = <Clock className="size-4 text-warning animate-spin" aria-hidden="true" />;
   } else if (state === 'error') {
     label = 'Save failed — retrying';
-    tone = 'error';
-    symbol = 'alert';
+    icon = <AlertTriangle className="size-4 text-destructive" aria-hidden="true" />;
   } else if (lastSavedAt) {
     label = `Saved ${new Date(lastSavedAt.replace(' ', 'T') + 'Z').toLocaleTimeString()}`;
   }
   return (
-    <div className={`save-state ${tone}`} role="status" aria-live="polite">
-      {symbol === 'check' && <IconCheck />}
-      {symbol === 'clock' && <IconClock />}
-      {symbol === 'alert' && <IconAlert />}
-      {label}
+    <div className="save-state" role="status" aria-live="polite">
+      {icon}
+      <span>{label}</span>
     </div>
   );
 }
@@ -501,20 +649,26 @@ function AnswerControl({
   if (qtype === 'single') {
     return (
       <div role="radiogroup" aria-label="Options">
-        {options.map((o, i) => (
-          <label key={i} className={`option${Number(value) === i ? ' selected' : ''}`}>
-            <input
-              type="radio"
-              name="ra"
-              checked={Number(value) === i}
-              onChange={() => onChange(i)}
-              aria-label={`Option ${i + 1}`}
-            />
-            <span className="option-label">
-              <RichText content={o} />
-            </span>
-          </label>
-        ))}
+        {options.map((o, i) => {
+          const selected = Number(value) === i;
+          return (
+            <label
+              key={i}
+              className={`option ${selected ? 'selected' : ''}`}
+            >
+              <input
+                type="radio"
+                name="ra"
+                checked={selected}
+                onChange={() => onChange(i)}
+                aria-label={`Option ${i + 1}`}
+              />
+              <span className="option-label">
+                <RichText content={o} />
+              </span>
+            </label>
+          );
+        })}
       </div>
     );
   }
@@ -522,26 +676,32 @@ function AnswerControl({
     const arr = Array.isArray(value) ? (value as unknown[]).map(Number) : [];
     return (
       <div role="group" aria-label="Options (select all that apply)">
-        {options.map((o, i) => (
-          <label key={i} className={`option${arr.includes(i) ? ' selected' : ''}`}>
-            <input
-              type="checkbox"
-              checked={arr.includes(i)}
-              onChange={() => {
-                onChange(arr.includes(i) ? arr.filter((x) => x !== i) : [...arr, i]);
-              }}
-            />
-            <span className="option-label">
-              <RichText content={o} />
-            </span>
-          </label>
-        ))}
+        {options.map((o, i) => {
+          const selected = arr.includes(i);
+          return (
+            <label
+              key={i}
+              className={`option ${selected ? 'selected' : ''}`}
+            >
+              <input
+                type="checkbox"
+                checked={selected}
+                onChange={() => {
+                  onChange(arr.includes(i) ? arr.filter((x) => x !== i) : [...arr, i]);
+                }}
+              />
+              <span className="option-label">
+                <RichText content={o} />
+              </span>
+            </label>
+          );
+        })}
       </div>
     );
   }
   if (qtype === 'numeric') {
     return (
-      <input
+      <Input
         type="number"
         step="any"
         value={typeof value === 'number' ? value : String(value ?? '')}
@@ -551,7 +711,7 @@ function AnswerControl({
     );
   }
   return (
-    <input
+    <Input
       type="text"
       value={typeof value === 'string' ? value : ''}
       onChange={(e) => onChange(e.target.value)}

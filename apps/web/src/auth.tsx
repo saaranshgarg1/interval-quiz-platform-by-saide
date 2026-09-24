@@ -7,6 +7,7 @@ interface AuthState {
   token: string | null;
   login: (email: string, password: string) => Promise<User>;
   register: (name: string, email: string, password: string, role: 'student' | 'instructor') => Promise<User>;
+  sso: (idToken: string) => Promise<User>;
   logout: () => void;
   refresh: () => Promise<void>;
 }
@@ -54,6 +55,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const sso = useCallback(async (idToken: string) => {
+    const res = await api.post<{ token: string; user: User }>('/auth/sso', { id_token: idToken });
+    setToken(res.token);
+    setTok(res.token);
+    setUser(res.user);
+    return res.user;
+  }, []);
+
   const logout = useCallback(() => {
     setToken(null);
     setTok(null);
@@ -61,7 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, token, login, register, logout, refresh }}>
+    <AuthContext.Provider value={{ user, token, login, register, sso, logout, refresh }}>
       {children}
     </AuthContext.Provider>
   );

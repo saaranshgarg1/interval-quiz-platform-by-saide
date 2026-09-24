@@ -1,25 +1,17 @@
 import { Router } from 'express';
 import { requireAuth, AppError, type AuthedRequest } from '../auth.js';
-import { courseRepo, bankRepo } from '../repo.js';
+import { bankRepo } from '../repo.js';
 import type { QuestionType } from '../types.js';
+import { assertStaff, assertInstructor, writeAudit } from '../authz.js';
 
 export const banksRouter = Router();
 
 banksRouter.use(requireAuth);
 
-function requireStaff(req: AuthedRequest, courseId: number) {
-  const userId = req.userId as number;
-  if (req.userRole === 'admin') return;
-  const role = courseRepo.courseRole(courseId, userId);
-  if (role !== 'instructor' && role !== 'ta') {
-    throw new AppError(403, 'Only instructors and TAs can access question banks.');
-  }
-}
-
 // List question banks for a course
 banksRouter.get('/course/:courseId', (req: AuthedRequest, res) => {
   const courseId = Number(req.params.courseId);
-  requireStaff(req, courseId);
+  assertStaff(req, courseId);
   const banks = bankRepo.listForCourse(courseId);
   res.json({ banks });
 });
@@ -27,7 +19,7 @@ banksRouter.get('/course/:courseId', (req: AuthedRequest, res) => {
 // Create a new question bank
 banksRouter.post('/course/:courseId', (req: AuthedRequest, res) => {
   const courseId = Number(req.params.courseId);
-  requireStaff(req, courseId);
+  assertStaff(req, courseId);
   const { name, description } = req.body ?? {};
   if (!name || typeof name !== 'string' || !name.trim()) {
     throw new AppError(400, 'Bank name is required.');
@@ -41,7 +33,7 @@ banksRouter.get('/:bankId', (req: AuthedRequest, res) => {
   const bankId = Number(req.params.bankId);
   const bank = bankRepo.get(bankId);
   if (!bank) throw new AppError(404, 'Question bank not found.');
-  requireStaff(req, bank.course_id);
+  assertStaff(req, bank.course_id);
   const questions = bankRepo.listQuestions(bankId);
   res.json({ bank, questions });
 });
@@ -51,8 +43,9 @@ banksRouter.delete('/:bankId', (req: AuthedRequest, res) => {
   const bankId = Number(req.params.bankId);
   const bank = bankRepo.get(bankId);
   if (!bank) throw new AppError(404, 'Question bank not found.');
-  requireStaff(req, bank.course_id);
+  assertInstructor(req, bank.course_id);
   bankRepo.delete(bankId);
+  writeAudit(req, { action: 'bank.delete', course_id: bank.course_id, target: 'bank:' + bankId });
   res.json({ ok: true });
 });
 
@@ -61,7 +54,7 @@ banksRouter.post('/:bankId/questions', (req: AuthedRequest, res) => {
   const bankId = Number(req.params.bankId);
   const bank = bankRepo.get(bankId);
   if (!bank) throw new AppError(404, 'Question bank not found.');
-  requireStaff(req, bank.course_id);
+  assertStaff(req, bank.course_id);
 
   const { qtype, text, options, answer, tolerance, points, tags } = req.body ?? {};
   if (!['single', 'multiple', 'short', 'numeric'].includes(qtype)) {
@@ -90,7 +83,7 @@ banksRouter.delete('/:bankId/questions/:questionId', (req: AuthedRequest, res) =
   const questionId = Number(req.params.questionId);
   const bank = bankRepo.get(bankId);
   if (!bank) throw new AppError(404, 'Question bank not found.');
-  requireStaff(req, bank.course_id);
+  assertStaff(req, bank.course_id);
 
   bankRepo.deleteQuestion(questionId);
   res.json({ ok: true });
@@ -101,7 +94,7 @@ banksRouter.post('/:bankId/import', (req: AuthedRequest, res) => {
   const bankId = Number(req.params.bankId);
   const bank = bankRepo.get(bankId);
   if (!bank) throw new AppError(404, 'Question bank not found.');
-  requireStaff(req, bank.course_id);
+  assertStaff(req, bank.course_id);
 
   const { questions } = req.body ?? {};
   if (!Array.isArray(questions) || questions.length === 0) {

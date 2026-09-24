@@ -1,12 +1,26 @@
-import { useEffect, useState, useCallback } from 'react';
-import { Link, useParams, useNavigate } from 'react-router-dom';
+import { useState } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { useQuiz } from '../lib/queries';
 import { api, ApiError } from '../api';
 import { useAuth } from '../auth';
-import type { QuizDetailResponse } from '../types';
-import { Pill, statusLabel } from '../components/ui';
-import type { ReactNode } from 'react';
+import type { VersionDetail } from '../types';
+import { Page, EmptyState, ErrorState, LoadingSkeleton } from '../components/primitives';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
+import {
+  ShieldAlert,
+  Clock,
+  FileText,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  ArrowRight,
+} from 'lucide-react';
+import { motion, useReducedMotion } from 'framer-motion';
 
-const POLICY_TEXT: Record<string, { label: string; body: string }> = {
+const POLICY_TEXT: Record<VersionDetail['integrity_policy'], { label: string; body: string }> = {
   off: {
     label: 'Off',
     body: 'No focus-monitoring events are collected during your attempt. Your answers are the only recorded data.',
@@ -21,189 +35,253 @@ const POLICY_TEXT: Record<string, { label: string; body: string }> = {
   },
 };
 
-interface PastAttempt {
-  id: number;
-  status: string;
-  started_at: string;
-  submitted_at: string | null;
-  receipt: string | null;
-  score: number | null;
-  max_score: number | null;
-  can_view_result: boolean;
+function policyBadgeVariant(policy: VersionDetail['integrity_policy']): 'default' | 'secondary' | 'destructive' {
+  if (policy === 'strict') return 'destructive';
+  if (policy === 'warn') return 'secondary';
+  return 'default';
+}
+
+function statusBadge(status: VersionDetail['status']): { label: string; variant: 'default' | 'secondary' | 'destructive' } {
+  switch (status) {
+    case 'published':
+      return { label: 'Published', variant: 'default' };
+    case 'archived':
+      return { label: 'Archived', variant: 'destructive' };
+    default:
+      return { label: 'Draft', variant: 'secondary' };
+  }
 }
 
 export function QuizPreflightPage() {
   const { quizId } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [detail, setDetail] = useState<QuizDetailResponse | null>(null);
-  const [past, setPast] = useState<PastAttempt[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const quizNumericId = Number(quizId);
 
-  const load = useCallback(async () => {
-    try {
-      const res = await api.get<QuizDetailResponse>(`/quizzes/${quizId}`);
-      setDetail(res);
-      const version = res.versions.find((v) => v.status === 'published') ?? res.versions[0];
-      if (version) {
-        const mine = await api.get<{ attempts: PastAttempt[] }>(`/attempts/quiz/${version.id}/mine`);
-        setPast(mine.attempts);
-      }
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to load quiz.');
-    }
-  }, [quizId]);
+  const [startError, setStartError] = useState<string | null>(null);
+  const [startBusy, setStartBusy] = useState(false);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const {
+    data: quizResponse,
+    isLoading,
+    isError,
+    error: queryError,
+    refetch,
+  } = useQuiz(quizNumericId);
 
-  const version = detail?.versions.find((v) => v.status === 'published') ?? detail?.versions[0];
-  const my = version?.my_attempts;
+  // framer-motion entrance, guarded by prefers-reduced-motion
+  const reduceMotion = useReducedMotion();
+  const entrance =
+    reduceMotion === false
+      ? {
+          initial: { opacity: 0, y: 8 },
+          animate: { opacity: 1, y: 0 },
+          transition: { duration: 0.3, ease: [0.22, 1, 0.36, 1] as const },
+        }
+      : { initial: undefined, animate: undefined, transition: undefined };
+
+  const version =
+    quizResponse?.versions.find((v) => v.status === 'published') ?? quizResponse?.versions[0];
+
+  if (isLoading) {
+    return (
+      <Page title="Quiz preflight">
+        <LoadingSkeleton rows={4} variant="list" />
+      </Page>
+    );
+  }
+
+  if (isError) {
+    return (
+      <Page title="Quiz preflight">
+        <ErrorState
+          title="Could not load this quiz"
+          error={queryError}
+          onRetry={() => void refetch()}
+        />
+      </Page>
+    );
+  }
+
+  if (!quizResponse || !version) {
+    return (
+      <Page title="Quiz preflight">
+        <EmptyState
+          icon={FileText}
+          title="No quiz found"
+          description="This quiz does not exist or has no versions available yet."
+        />
+      </Page>
+    );
+  }
+
   const isStaff = user?.role !== 'student';
-  const canStart = !!version && user?.role === 'student' && !my?.in_progress;
+  const isStudent = user?.role === 'student';
+  const my = version.my_attempts;
+  const attemptsUsed = my?.count ?? 0;
+  const attemptsAllowed = version.attempts_allowed;
+  const attemptsRemaining = attemptsAllowed - attemptsUsed;
+  const canStart = isStudent && !my?.in_progress && version.status === 'published' && attemptsRemaining > 0;
+  const policy = POLICY_TEXT[version.integrity_policy];
+  const statusInfo = statusBadge(version.status);
 
   const start = async () => {
-    if (!version) return;
-    setBusy(true);
-    setError(null);
+    setStartBusy(true);
+    setStartError(null);
     try {
       const view = await api.post<{ attempt: { id: number } }>(`/attempts/quiz/${version.id}`);
       navigate(`/attempts/${view.attempt.id}`);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not start attempt.');
+      setStartError(err instanceof ApiError ? err.message : 'Could not start attempt.');
     } finally {
-      setBusy(false);
+      setStartBusy(false);
     }
   };
 
-  if (error && !detail) return <div className="banner error">{error}</div>;
-  if (!detail || !version) return <p className="muted">Loading quiz…</p>;
-
-  const policy = POLICY_TEXT[version.integrity_policy] ?? POLICY_TEXT.off;
-
   return (
-    <div>
-      <div className="card-row">
-        <div className="grow">
-          <h1>{version.title}</h1>
-          <p className="muted small">Version {version.version}</p>
-        </div>
-        <Pill tone={version.status === 'published' ? 'ok' : 'warn'} symbol={version.status === 'published' ? '✓' : '✎'}>
-          {version.status}
-        </Pill>
-      </div>
-
-      {error && <div className="banner error">{error}</div>}
-      <p>{version.instructions || 'No further instructions were provided.'}</p>
-
-      <div className="grid-3" style={{ margin: '1rem 0' }}>
-        <div className="card">
-          <h3>Questions</h3>
-          <div className="muted">{version.questions.length} question(s)</div>
-        </div>
-        <div className="card">
-          <h3>Time limit</h3>
-          <div className="muted">{version.duration_minutes ? `${version.duration_minutes} minutes` : 'No timer'}</div>
-        </div>
-        <div className="card">
-          <h3>Attempts</h3>
-          <div className="muted">
-            {my?.count ?? 0}/{version.attempts_allowed} used
-            {my?.best_score != null ? ` · best ${my.best_score}` : ''}
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <h3>What we monitor (preflight disclosure)</h3>
-        <p className="small">
-          <Pill tone={version.integrity_policy === 'off' ? 'ok' : version.integrity_policy === 'warn' ? 'warn' : 'danger'} symbol="·">
+    <Page title={version.title} description={`Version ${version.version}`}>
+      <motion.div className="stack-md" {...entrance}>
+        {/* Badges */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <Badge variant={statusInfo.variant}>{statusInfo.label}</Badge>
+          <Badge variant={policyBadgeVariant(version.integrity_policy)}>
             Policy: {policy.label}
-          </Pill>
-        </p>
-        <p className="small muted">{policy.body}</p>
-        <p className="small muted">
-          Answers are saved automatically with a server acknowledgement. Look for the <strong>Save status</strong> line;{' '}
-          <strong>Saved</strong> means the server stored it. You can always see your latest acknowledged save.
-        </p>
-      </div>
-
-      <div style={{ marginTop: '1.25rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-        {user?.role === 'student' && my?.in_progress ? (
-          <button className="btn" onClick={() => navigate(`/attempts/${my.in_progress}`)}>
-            ◐ Continue attempt
-          </button>
-        ) : null}
-        {canStart && version.status === 'published' && (my?.count ?? 0) < version.attempts_allowed && (
-          <button className="btn" onClick={() => void start()} disabled={busy}>
-            {busy ? 'Starting…' : 'Start attempt'}
-          </button>
-        )}
-        {version.status === 'published' && isStaff && (
-          <button className="btn secondary" onClick={() => navigate(`/quizzes/${quizId}`)}>
-            Open editor
-          </button>
-        )}
-        {isStaff && (
-          <a className="btn secondary" href={`/api/results/quiz/${version.id}/export.csv`} target="_blank" rel="noreferrer">
-            Export results CSV
-          </a>
-        )}
-      </div>
-
-      {(my?.count ?? 0) >= version.attempts_allowed && user?.role === 'student' && (
-        <div className="banner warn" style={{ marginTop: '1rem' }}>
-          You have used all {version.attempts_allowed} allowed attempt(s). Contact your instructor if you need another.
+          </Badge>
         </div>
-      )}
 
-      {past.length > 0 && (
-        <section style={{ marginTop: '1.5rem' }}>
-          <h3>Your attempts</h3>
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Status</th>
-                <th>Started</th>
-                <th>Submitted</th>
-                <th>Receipt</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {past.map((a, i) => {
-                const st = statusLabel(a.status);
-                return (
-                  <tr key={a.id}>
-                    <td>{past.length - i}</td>
-                    <td><Pill tone={st.tone} symbol={st.symbol}>{st.label}</Pill></td>
-                    <td className="small">{new Date(a.started_at).toLocaleString()}</td>
-                    <td className="small">{a.submitted_at ? new Date(a.submitted_at).toLocaleString() : '—'}</td>
-                    <td className="mono small">{a.receipt ?? '—'}</td>
-                    <td>
-                      {a.can_view_result && (
-                        <LinkButton to={`/results/attempt/${a.id}`}>View result</LinkButton>
-                      )}
-                      {a.status === 'locked' && <span className="muted small">Locked · request review</span>}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </section>
-      )}
-    </div>
-  );
-}
+        <Separator />
 
-function LinkButton({ to, children }: { to: string; children: ReactNode }) {
-  return (
-    <Link className="btn small secondary" to={to}>
-      {children}
-    </Link>
+        {/* Start error (inline) */}
+        {startError && (
+          <div
+            role="alert"
+            className="rounded-[var(--radius-md)] border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+          >
+            {startError}
+          </div>
+        )}
+
+        {/* Info cards */}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <Card>
+            <CardContent className="flex items-center gap-3 p-5 pt-0">
+              <FileText className="size-5 shrink-0 text-primary" aria-hidden="true" />
+              <div>
+                <p className="text-xs font-medium text-muted-foreground">Questions</p>
+                <p className="text-sm font-semibold text-foreground">{version.questions.length}</p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="flex items-center gap-3 p-5 pt-0">
+              <Clock className="size-5 shrink-0 text-primary" aria-hidden="true" />
+              <div>
+                <p className="text-xs font-medium text-muted-foreground">Time limit</p>
+                <p className="text-sm font-semibold text-foreground">
+                  {version.duration_minutes ? `${version.duration_minutes} min` : 'No timer'}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="flex items-center gap-3 p-5 pt-0">
+              {attemptsRemaining > 0 ? (
+                <CheckCircle2 className="size-5 shrink-0 text-success" aria-hidden="true" />
+              ) : (
+                <XCircle className="size-5 shrink-0 text-destructive" aria-hidden="true" />
+              )}
+              <div>
+                <p className="text-xs font-medium text-muted-foreground">Attempts</p>
+                <p className="text-sm font-semibold text-foreground">
+                  {attemptsUsed} / {attemptsAllowed} used
+                  {my?.best_score != null ? (
+                    <span className="ml-1 text-muted-foreground">· best {my.best_score}</span>
+                  ) : null}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Integrity policy disclosure */}
+        <Card>
+          <CardContent className="space-y-4 p-5">
+            <div className="flex items-center gap-2">
+              <ShieldAlert
+                className={
+                  version.integrity_policy === 'strict'
+                    ? 'size-5 text-destructive'
+                    : version.integrity_policy === 'warn'
+                      ? 'size-5 text-warning'
+                      : 'size-5 text-muted-foreground'
+                }
+                aria-hidden="true"
+              />
+              <h2 className="font-display text-base font-semibold text-foreground">
+                Integrity policy: {policy.label}
+              </h2>
+            </div>
+
+            <p className="text-sm text-foreground/80">{policy.body}</p>
+
+            {version.integrity_policy === 'strict' && (
+              <div className="flex items-start gap-2 rounded-[var(--radius-md)] border border-warning/40 bg-[var(--warning)]/10 p-3 text-sm text-warning">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                <p>
+                  <strong>Strict policy active.</strong> Leaving the quiz window may lock your attempt until an
+                  instructor reviews and reinstates it. The deadline keeps running while locked.
+                </p>
+              </div>
+            )}
+
+            <p className="text-xs text-muted-foreground">
+              Answers are saved automatically with a server acknowledgement. Look for the <strong>Save status</strong> line
+              in the attempt — <strong>Saved</strong> means the server stored it. You can always see your latest
+              acknowledged save.
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Actions */}
+        <div className="flex flex-wrap items-center gap-3">
+          {my?.in_progress && (
+            <Button onClick={() => navigate(`/attempts/${my.in_progress}`)}>
+              Continue attempt
+              <ArrowRight aria-hidden="true" />
+            </Button>
+          )}
+
+          {canStart && (
+            <Button onClick={() => void start()} disabled={startBusy}>
+              {startBusy ? 'Starting…' : 'Start attempt'}
+            </Button>
+          )}
+
+          {version.status !== 'published' && (
+            <EmptyState
+              icon={FileText}
+              title="Not yet published"
+              description="Only published versions can be started. Ask the instructor to publish this version first."
+            />
+          )}
+
+          {version.status === 'published' && isStudent && attemptsRemaining <= 0 && (
+            <EmptyState
+              icon={XCircle}
+              title="No attempts remaining"
+              description={`All ${attemptsAllowed} allowed attempt(s) have been used. Contact your instructor if you need another.`}
+            />
+          )}
+
+          {isStaff && (
+            <Button variant="secondary" onClick={() => navigate(`/quizzes/${quizId}`)}>
+              Open editor
+            </Button>
+          )}
+        </div>
+      </motion.div>
+    </Page>
   );
 }

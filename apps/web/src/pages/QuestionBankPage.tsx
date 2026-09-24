@@ -1,557 +1,848 @@
-import React, { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { api } from '../api';
-import type { QuestionBank, BankQuestion, QuestionType } from '../types';
-import { Button, Card, Badge } from '../components/ui';
-import { RichText } from '../components/RichText';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import {
+  Plus,
+  Trash2,
+  Search,
+  Filter,
+  ChevronLeft,
+  HelpCircle,
+  ListPlus,
+} from 'lucide-react';
+import { api } from '@/api';
+import { qk, useBanks, useBank } from '@/lib/queries';
+import type { QuestionBank, BankQuestion, QuestionType } from '@/types';
+import { toast } from '@/components/ui/sonner';
+import { cn } from '@/lib/utils';
+import { Page, EmptyState, ErrorState, LoadingSkeleton } from '@/components/primitives';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
+import { Separator } from '@/components/ui/separator';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { RichText } from '@/components/RichText';
+import {
+  type ColumnDef,
+  type ColumnFiltersState,
+  type SortingState,
+  flexRender,
+  getCoreRowModel,
+  getFilteredRowModel,
+  getSortedRowModel,
+  useReactTable,
+} from '@tanstack/react-table';
 
-export const QuestionBankPage: React.FC = () => {
-  const { courseId } = useParams<{ courseId: string }>();
-  const cId = Number(courseId);
+// ─── Schemas ───────────────────────────────────────────────────────────────
 
-  const [banks, setBanks] = useState<QuestionBank[]>([]);
-  const [selectedBank, setSelectedBank] = useState<QuestionBank | null>(null);
-  const [questions, setQuestions] = useState<BankQuestion[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+const newBankSchema = z.object({
+  name: z.string().min(1, 'Bank name is required').max(200),
+  description: z.string().max(1000).optional(),
+});
 
-  // New Bank state
-  const [showNewBank, setShowNewBank] = useState(false);
-  const [bankName, setBankName] = useState('');
-  const [bankDesc, setBankDesc] = useState('');
+const questionBase = {
+  text: z.string().min(1, 'Question text is required'),
+  points: z.coerce.number().min(0.5, 'Must be at least 0.5').max(100),
+  tags: z.string().optional(),
+};
 
-  // New Question state
-  const [showNewQuestion, setShowNewQuestion] = useState(false);
-  const [qType, setQType] = useState<QuestionType>('single');
-  const [qText, setQText] = useState('');
-  const [options, setOptions] = useState<string[]>(['', '', '', '']);
-  const [answer, setAnswer] = useState<any>(0);
-  const [points, setPoints] = useState<number>(1);
-  const [tolerance, setTolerance] = useState<number>(0);
-  const [tags, setTags] = useState<string>('');
+const singleMultipleSchema = z.object({
+  ...questionBase,
+  qtype: z.enum(['single', 'multiple']),
+  options: z.array(z.string().min(1, 'Option cannot be empty')).min(2, 'At least 2 options required'),
+  answer: z.any(),
+  tolerance: z.any().optional(),
+});
 
-  // Batch import state
-  const [showImport, setShowImport] = useState(false);
-  const [importJson, setImportJson] = useState('');
+const shortSchema = z.object({
+  ...questionBase,
+  qtype: z.enum(['short']),
+  answer: z.string().min(1, 'Answer is required'),
+  options: z.any().optional(),
+  tolerance: z.any().optional(),
+});
 
-  const loadBanks = async () => {
-    try {
-      setLoading(true);
-      const res = await api.get<{ banks: QuestionBank[] }>(`/banks/course/${cId}`);
-      setBanks(res.banks);
-      if (res.banks.length > 0 && !selectedBank) {
-        selectBank(res.banks[0]!);
-      }
-    } catch (err: any) {
-      setError(err.message || 'Failed to load question banks.');
-    } finally {
-      setLoading(false);
-    }
-  };
+const numericSchema = z.object({
+  ...questionBase,
+  qtype: z.enum(['numeric']),
+  answer: z.coerce.number({ error: 'Must be a number' }),
+  tolerance: z.coerce.number().min(0).optional(),
+  options: z.any().optional(),
+});
 
-  const selectBank = async (bank: QuestionBank) => {
-    setSelectedBank(bank);
-    try {
-      const res = await api.get<{ bank: QuestionBank; questions: BankQuestion[] }>(
-        `/banks/${bank.id}`,
+const questionSchema = z.discriminatedUnion('qtype', [
+  singleMultipleSchema,
+  shortSchema,
+  numericSchema,
+]);
+
+type NewBankForm = z.infer<typeof newBankSchema>;
+type QuestionForm = z.infer<typeof questionSchema>;
+
+// ─── Table columns ──────────────────────────────────────────────────────────
+
+const typeVariant = (qtype: QuestionType) =>
+  qtype === 'single' || qtype === 'multiple' ? 'default' : 'secondary';
+
+const columns: ColumnDef<BankQuestion>[] = [
+  {
+    accessorKey: 'qtype',
+    header: 'Type',
+    cell: ({ getValue }) => {
+      const qtype = getValue<QuestionType>();
+      return <Badge variant={typeVariant(qtype)}>{qtype.toUpperCase()}</Badge>;
+    },
+    enableSorting: false,
+    size: 110,
+  },
+  {
+    accessorKey: 'text',
+    header: 'Question',
+    cell: ({ getValue }) => {
+      const text = getValue<string>();
+      return (
+        <div className="max-w-[320px] truncate" title={text}>
+          <RichText content={text} />
+        </div>
       );
-      setQuestions(res.questions);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load bank questions.');
-    }
-  };
+    },
+    enableSorting: false,
+  },
+  {
+    accessorKey: 'points',
+    header: 'Points',
+    cell: ({ getValue }) => getValue<number>(),
+    size: 80,
+  },
+  {
+    accessorKey: 'tags',
+    header: 'Tags',
+    cell: ({ getValue }) => {
+      const tags = getValue<string[]>();
+      if (!tags || tags.length === 0) return <span className="text-muted-foreground">—</span>;
+      return (
+        <div className="flex flex-wrap gap-1">
+          {tags.map((t) => (
+            <Badge key={t} variant="outline" className="text-xs">
+              {t}
+            </Badge>
+          ))}
+        </div>
+      );
+    },
+    enableSorting: false,
+  },
+];
 
-  useEffect(() => {
-    if (cId) loadBanks();
-  }, [cId]);
+// ─── New Bank form ──────────────────────────────────────────────────────────
 
-  const handleCreateBank = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!bankName.trim()) return;
+function NewBankForm({
+  open,
+  onOpenChange,
+  courseId,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  courseId: number;
+}) {
+  const queryClient = useQueryClient();
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<NewBankForm>({
+    resolver: zodResolver(newBankSchema),
+  });
+
+  const onSubmit = async (data: NewBankForm) => {
     try {
-      const res = await api.post<{ bank: QuestionBank }>(`/banks/course/${cId}`, {
-        name: bankName.trim(),
-        description: bankDesc.trim(),
+      const res = await api.post<{ bank: QuestionBank }>(`/banks/course/${courseId}`, {
+        name: data.name.trim(),
+        description: data.description?.trim() ?? '',
       });
-      setBankName('');
-      setBankDesc('');
-      setShowNewBank(false);
-      await loadBanks();
-      selectBank(res.bank);
+      await queryClient.invalidateQueries({ queryKey: qk.banks(courseId) });
+      toast.success('Question bank created', { description: res.bank.name });
+      onOpenChange(false);
     } catch (err: any) {
-      setError(err.message || 'Failed to create question bank.');
+      toast.error('Failed to create bank', { description: err.message });
     }
-  };
-
-  const handleDeleteBank = async (bankId: number) => {
-    if (!confirm('Are you sure you want to delete this question bank?')) return;
-    try {
-      await api.del(`/banks/${bankId}`);
-      if (selectedBank?.id === bankId) setSelectedBank(null);
-      await loadBanks();
-    } catch (err: any) {
-      setError(err.message || 'Failed to delete question bank.');
-    }
-  };
-
-  const handleAddQuestion = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedBank || !qText.trim()) return;
-
-    let finalAnswer = answer;
-    if (qType === 'single') finalAnswer = Number(answer);
-    if (qType === 'numeric') finalAnswer = Number(answer);
-    if (qType === 'multiple') {
-      finalAnswer = Array.isArray(answer) ? answer : [Number(answer)];
-    }
-
-    try {
-      await api.post(`/banks/${selectedBank.id}/questions`, {
-        qtype: qType,
-        text: qText.trim(),
-        options: qType === 'single' || qType === 'multiple' ? options : [],
-        answer: finalAnswer,
-        tolerance: qType === 'numeric' ? tolerance : null,
-        points,
-        tags: tags ? tags.split(',').map((t) => t.trim()).filter(Boolean) : [],
-      });
-      setShowNewQuestion(false);
-      setQText('');
-      setOptions(['', '', '', '']);
-      setAnswer(0);
-      setTags('');
-      selectBank(selectedBank);
-    } catch (err: any) {
-      setError(err.message || 'Failed to add question.');
-    }
-  };
-
-  const handleDeleteQuestion = async (qId: number) => {
-    if (!selectedBank) return;
-    try {
-      await api.del(`/banks/${selectedBank.id}/questions/${qId}`);
-      selectBank(selectedBank);
-    } catch (err: any) {
-      setError(err.message || 'Failed to delete question.');
-    }
-  };
-
-  const handleImportJson = async () => {
-    if (!selectedBank || !importJson.trim()) return;
-    try {
-      const parsed = JSON.parse(importJson);
-      const list = Array.isArray(parsed) ? parsed : parsed.questions;
-      await api.post(`/banks/${selectedBank.id}/import`, { questions: list });
-      setImportJson('');
-      setShowImport(false);
-      selectBank(selectedBank);
-    } catch (err: any) {
-      setError('Invalid JSON format. Expected an array of question objects.');
-    }
-  };
-
-  const handleExportJson = () => {
-    if (!selectedBank) return;
-    const blob = new Blob([JSON.stringify(questions, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${selectedBank.name.replace(/\s+/g, '_')}_questions.json`;
-    a.click();
   };
 
   return (
-    <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '24px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-        <div>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '4px' }}>
-            <Link to={`/courses/${cId}`} style={{ color: 'var(--text-muted, #64748b)', fontSize: '0.9rem' }}>
-              ← Back to Course
-            </Link>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Create Question Bank</DialogTitle>
+          <DialogDescription>
+            Give this bank a name and optional description. You can add questions after creation.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+          <div>
+            <Label htmlFor="bank-name">Bank Name</Label>
+            <Input
+              id="bank-name"
+              placeholder="e.g. Midterm AI Questions"
+              {...register('name')}
+              aria-invalid={!!errors.name}
+              aria-describedby="bank-name-error"
+            />
+            {errors.name && (
+              <p id="bank-name-error" className="text-sm text-destructive mt-1">
+                {errors.name.message}
+              </p>
+            )}
           </div>
-          <h1 style={{ margin: 0, fontSize: '1.75rem' }}>Question Banks</h1>
-          <p style={{ margin: '4px 0 0', color: 'var(--text-muted, #64748b)' }}>
-            Organize reusable question repositories with LaTeX math support and batch JSON import/export.
-          </p>
-        </div>
-        <Button onClick={() => setShowNewBank(true)}>+ New Question Bank</Button>
-      </div>
+          <div>
+            <Label htmlFor="bank-desc">Description (optional)</Label>
+            <Textarea
+              id="bank-desc"
+              placeholder="Topic coverage or notes..."
+              rows={3}
+              {...register('description')}
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? 'Creating…' : 'Create Bank'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
-      {error && (
-        <div style={{ background: '#fee2e2', color: '#b91c1c', padding: '12px 16px', borderRadius: '8px', marginBottom: '20px' }}>
-          {error}
-        </div>
-      )}
+// ─── New Question form ──────────────────────────────────────────────────────
 
-      {/* New Bank Modal */}
-      {showNewBank && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <Card style={{ width: '450px', padding: '24px', background: 'var(--bg, #fff)' }}>
-            <h3 style={{ margin: '0 0 16px' }}>Create Question Bank</h3>
-            <form onSubmit={handleCreateBank}>
-              <div style={{ marginBottom: '12px' }}>
-                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '4px' }}>
-                  Bank Name
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Midterm AI Questions"
-                  value={bankName}
-                  onChange={(e) => setBankName(e.target.value)}
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--border, #cbd5e1)' }}
-                />
-              </div>
-              <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '4px' }}>
-                  Description
-                </label>
-                <textarea
-                  rows={3}
-                  placeholder="Optional description or topic coverage..."
-                  value={bankDesc}
-                  onChange={(e) => setBankDesc(e.target.value)}
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--border, #cbd5e1)' }}
-                />
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-                <Button type="button" variant="secondary" onClick={() => setShowNewBank(false)}>
-                  Cancel
+function NewQuestionForm({
+  open,
+  onOpenChange,
+  bankId,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  bankId: number;
+}) {
+  const queryClient = useQueryClient();
+  const [qtype, setQtype] = useState<QuestionType>('single');
+
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+    watch,
+    setValue,
+  } = useForm<z.input<typeof questionSchema>, unknown, QuestionForm>({
+    resolver: zodResolver(questionSchema),
+    defaultValues: {
+      qtype: 'single',
+      text: '',
+      options: ['', '', '', ''],
+      answer: 0,
+      points: 1,
+      tolerance: 0,
+      tags: '',
+    },
+  });
+
+  const watchedOptions = watch('options') as string[] | undefined;
+  const watchedAnswer = watch('answer');
+
+  const updateOption = (idx: number, val: string) => {
+    const opts = [...(watchedOptions ?? [])];
+    opts[idx] = val;
+    setValue('options', opts);
+  };
+
+  const toggleOptionAnswer = (idx: number) => {
+    if (qtype === 'single') {
+      setValue('answer', idx);
+    } else {
+      const curr = Array.isArray(watchedAnswer) ? [...watchedAnswer] : [];
+      if (curr.includes(idx)) setValue('answer', curr.filter((x) => x !== idx));
+      else setValue('answer', [...curr, idx]);
+    }
+  };
+
+  const addOption = () => {
+    const opts = [...(watchedOptions ?? []), ''];
+    setValue('options', opts);
+  };
+
+  const onSubmit = async (data: QuestionForm) => {
+    try {
+      let finalAnswer: unknown = data.answer;
+      if (qtype === 'single') finalAnswer = Number(data.answer);
+      if (qtype === 'numeric') finalAnswer = Number(data.answer);
+      if (qtype === 'multiple') {
+        finalAnswer = Array.isArray(data.answer) ? data.answer : [Number(data.answer)];
+      }
+
+      await api.post(`/banks/${bankId}/questions`, {
+        qtype: data.qtype,
+        text: data.text.trim(),
+        options: qtype === 'single' || qtype === 'multiple' ? data.options : [],
+        answer: finalAnswer,
+        tolerance: qtype === 'numeric' ? data.tolerance : null,
+        points: data.points,
+        tags: data.tags
+          ? data.tags
+              .split(',')
+              .map((t) => t.trim())
+              .filter(Boolean)
+          : [],
+      });
+
+      await queryClient.invalidateQueries({ queryKey: qk.bank(bankId) });
+      toast.success('Question added', { description: data.text.slice(0, 60) + '…' });
+      onOpenChange(false);
+    } catch (err: any) {
+      toast.error('Failed to add question', { description: err.message });
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Add Question to Bank</DialogTitle>
+          <DialogDescription>
+            Choose a question type and fill in the details. Supports LaTeX math in question text.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <Label htmlFor="qtype">Question Type</Label>
+              <select
+                id="qtype"
+                value={qtype}
+                onChange={(e) => {
+                  const val = e.target.value as QuestionType;
+                  setQtype(val);
+                  setValue('qtype', val);
+                }}
+                className="mt-1 block w-full rounded-[var(--radius-md)] border border-[var(--line-strong)] bg-card px-3 py-2 text-sm focus:outline-none focus:ring-[3px] focus:ring-ring/40"
+              >
+                <option value="single">Single Choice (Radio)</option>
+                <option value="multiple">Multiple Choice (Checkboxes)</option>
+                <option value="numeric">Numeric (Math / Range)</option>
+                <option value="short">Short Answer</option>
+              </select>
+            </div>
+            <div>
+              <Label htmlFor="points">Points</Label>
+              <Input
+                id="points"
+                type="number"
+                min="0.5"
+                step="0.5"
+                {...register('points')}
+                aria-invalid={!!errors.points}
+              />
+              {errors.points && <p className="text-sm text-destructive mt-1">{errors.points.message}</p>}
+            </div>
+          </div>
+
+          <div>
+            <Label htmlFor="qtext">Question Text (supports Markdown & LaTeX: e.g. $$x^2 + y^2$$)</Label>
+            <Textarea
+              id="qtext"
+              rows={3}
+              placeholder="e.g. Calculate the integral $\int_0^1 x dx$"
+              {...register('text')}
+              aria-invalid={!!errors.text}
+            />
+            {errors.text && <p className="text-sm text-destructive mt-1">{errors.text.message}</p>}
+          </div>
+
+          {(qtype === 'single' || qtype === 'multiple') && (
+            <div>
+              <Label className="flex items-center justify-between">
+                <span>Options</span>
+                <Button type="button" variant="ghost" size="sm" onClick={addOption}>
+                  <Plus className="size-3 mr-1" /> Add option
                 </Button>
-                <Button type="submit">Create Bank</Button>
-              </div>
-            </form>
-          </Card>
-        </div>
-      )}
-
-      {/* Main Grid: Left Banks List, Right Questions List */}
-      <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: '24px' }}>
-        {/* Left Column: Banks */}
-        <div>
-          <h3 style={{ fontSize: '1rem', marginBottom: '12px' }}>All Banks ({banks.length})</h3>
-          {loading ? (
-            <p style={{ color: 'var(--text-muted)' }}>Loading...</p>
-          ) : banks.length === 0 ? (
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No question banks created yet.</p>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {banks.map((b) => {
-                const isSelected = selectedBank?.id === b.id;
-                return (
-                  <div
-                    key={b.id}
-                    onClick={() => selectBank(b)}
-                    style={{
-                      padding: '12px 16px',
-                      borderRadius: '8px',
-                      cursor: 'pointer',
-                      border: isSelected ? '2px solid var(--primary, #2563eb)' : '1px solid var(--border, #e2e8f0)',
-                      background: isSelected ? 'var(--bg-active, #eff6ff)' : 'var(--bg, #ffffff)',
-                    }}
-                  >
-                    <div style={{ fontWeight: 600, display: 'flex', justifyContent: 'space-between' }}>
-                      <span>{b.name}</span>
-                      <Badge variant="secondary">{b.question_count ?? 0} Qs</Badge>
-                    </div>
-                    {b.description && (
-                      <p style={{ margin: '4px 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                        {b.description}
-                      </p>
+              </Label>
+              <div className="space-y-2 mt-2">
+                {(watchedOptions ?? []).map((opt, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <span className="w-6 text-center font-mono text-sm">
+                      {String.fromCharCode(65 + idx)}.
+                    </span>
+                    <Input
+                      value={opt ?? ''}
+                      onChange={(e) => updateOption(idx, e.target.value)}
+                      placeholder={`Option ${String.fromCharCode(65 + idx)}`}
+                    />
+                    {qtype === 'single' ? (
+                      <input
+                        type="radio"
+                        name="answer"
+                        checked={Number(watchedAnswer) === idx}
+                        onChange={() => toggleOptionAnswer(idx)}
+                        className="accent-[var(--primary)]"
+                      />
+                    ) : (
+                      <input
+                        type="checkbox"
+                        checked={Array.isArray(watchedAnswer) && watchedAnswer.includes(idx)}
+                        onChange={() => toggleOptionAnswer(idx)}
+                        className="accent-[var(--primary)]"
+                      />
                     )}
                   </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* Right Column: Selected Bank Questions */}
-        <div>
-          {selectedBank ? (
-            <div>
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  paddingBottom: '16px',
-                  borderBottom: '1px solid var(--border, #e2e8f0)',
-                  marginBottom: '20px',
-                }}
-              >
-                <div>
-                  <h2 style={{ margin: 0, fontSize: '1.35rem' }}>{selectedBank.name}</h2>
-                  <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                    {questions.length} questions in this bank
-                  </p>
-                </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <Button size="sm" variant="secondary" onClick={() => setShowImport(true)}>
-                    📥 Import JSON
-                  </Button>
-                  <Button size="sm" variant="secondary" onClick={handleExportJson} disabled={questions.length === 0}>
-                    📤 Export JSON
-                  </Button>
-                  <Button size="sm" onClick={() => setShowNewQuestion(true)}>
-                    + Add Question
-                  </Button>
-                  <Button size="sm" variant="danger" onClick={() => handleDeleteBank(selectedBank.id)}>
-                    Delete Bank
-                  </Button>
-                </div>
+                ))}
               </div>
-
-              {/* Import Modal */}
-              {showImport && (
-                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-                  <Card style={{ width: '600px', padding: '24px', background: 'var(--bg, #fff)' }}>
-                    <h3 style={{ margin: '0 0 8px' }}>Batch Import Questions</h3>
-                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '12px' }}>
-                      Paste a JSON array of question objects (keys: qtype, text, options, answer, points, tags).
-                    </p>
-                    <textarea
-                      rows={10}
-                      value={importJson}
-                      onChange={(e) => setImportJson(e.target.value)}
-                      placeholder={`[\n  {\n    "qtype": "single",\n    "text": "What is $$E=mc^2$$?",\n    "options": ["Energy formula", "Force", "Power", "Work"],\n    "answer": 0,\n    "points": 2\n  }\n]`}
-                      style={{ width: '100%', fontFamily: 'monospace', fontSize: '0.85rem', padding: '10px', borderRadius: '6px', border: '1px solid var(--border)' }}
-                    />
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' }}>
-                      <Button variant="secondary" onClick={() => setShowImport(false)}>
-                        Cancel
-                      </Button>
-                      <Button onClick={handleImportJson}>Import Questions</Button>
-                    </div>
-                  </Card>
-                </div>
-              )}
-
-              {/* Add Question Modal */}
-              {showNewQuestion && (
-                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-                  <Card style={{ width: '650px', maxHeight: '90vh', overflowY: 'auto', padding: '24px', background: 'var(--bg, #fff)' }}>
-                    <h3 style={{ margin: '0 0 16px' }}>Add Question to Bank</h3>
-                    <form onSubmit={handleAddQuestion}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-                        <div>
-                          <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px' }}>Question Type</label>
-                          <select
-                            value={qType}
-                            onChange={(e) => setQType(e.target.value as QuestionType)}
-                            style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid var(--border)' }}
-                          >
-                            <option value="single">Single Choice (Radio)</option>
-                            <option value="multiple">Multiple Choice (Checkboxes)</option>
-                            <option value="numeric">Numeric (Math / Range)</option>
-                            <option value="short">Short Answer</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px' }}>Points</label>
-                          <input
-                            type="number"
-                            min="0.5"
-                            step="0.5"
-                            value={points}
-                            onChange={(e) => setPoints(Number(e.target.value))}
-                            style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid var(--border)' }}
-                          />
-                        </div>
-                      </div>
-
-                      <div style={{ marginBottom: '12px' }}>
-                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px' }}>
-                          Question Text (Supports Markdown & LaTeX: e.g. $$x^2 + y^2$$)
-                        </label>
-                        <textarea
-                          rows={3}
-                          required
-                          value={qText}
-                          onChange={(e) => setQText(e.target.value)}
-                          placeholder="e.g. Calculate the integral $\int_0^1 x dx$"
-                          style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid var(--border)' }}
-                        />
-                        {qText && (
-                          <div style={{ marginTop: '8px', padding: '8px', background: '#f8fafc', borderRadius: '6px', border: '1px dashed #cbd5e1' }}>
-                            <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Live Preview:</span>
-                            <RichText content={qText} />
-                          </div>
-                        )}
-                      </div>
-
-                      {(qType === 'single' || qType === 'multiple') && (
-                        <div style={{ marginBottom: '12px' }}>
-                          <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px' }}>Options</label>
-                          {options.map((opt, idx) => (
-                            <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '6px' }}>
-                              <span style={{ width: '20px', fontWeight: 600 }}>{String.fromCharCode(65 + idx)}.</span>
-                              <input
-                                type="text"
-                                value={opt}
-                                onChange={(e) => {
-                                  const next = [...options];
-                                  next[idx] = e.target.value;
-                                  setOptions(next);
-                                }}
-                                placeholder={`Option ${String.fromCharCode(65 + idx)}`}
-                                style={{ flex: 1, padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border)' }}
-                              />
-                              {qType === 'single' ? (
-                                <input
-                                  type="radio"
-                                  name="bank_answer"
-                                  checked={Number(answer) === idx}
-                                  onChange={() => setAnswer(idx)}
-                                />
-                              ) : (
-                                <input
-                                  type="checkbox"
-                                  checked={Array.isArray(answer) && answer.includes(idx)}
-                                  onChange={(e) => {
-                                    const curr = Array.isArray(answer) ? [...answer] : [];
-                                    if (e.target.checked) setAnswer([...curr, idx]);
-                                    else setAnswer(curr.filter((x) => x !== idx));
-                                  }}
-                                />
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {qType === 'numeric' && (
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-                          <div>
-                            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px' }}>Correct Number</label>
-                            <input
-                              type="number"
-                              step="any"
-                              value={answer}
-                              onChange={(e) => setAnswer(Number(e.target.value))}
-                              style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid var(--border)' }}
-                            />
-                          </div>
-                          <div>
-                            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px' }}>Tolerance (±)</label>
-                            <input
-                              type="number"
-                              step="any"
-                              value={tolerance}
-                              onChange={(e) => setTolerance(Number(e.target.value))}
-                              style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid var(--border)' }}
-                            />
-                          </div>
-                        </div>
-                      )}
-
-                      {qType === 'short' && (
-                        <div style={{ marginBottom: '12px' }}>
-                          <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px' }}>Correct Answer (String)</label>
-                          <input
-                            type="text"
-                            value={answer}
-                            onChange={(e) => setAnswer(e.target.value)}
-                            style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid var(--border)' }}
-                          />
-                        </div>
-                      )}
-
-                      <div style={{ marginBottom: '16px' }}>
-                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px' }}>Tags (comma-separated)</label>
-                        <input
-                          type="text"
-                          value={tags}
-                          onChange={(e) => setTags(e.target.value)}
-                          placeholder="e.g. calculus, integrals, easy"
-                          style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid var(--border)' }}
-                        />
-                      </div>
-
-                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-                        <Button type="button" variant="secondary" onClick={() => setShowNewQuestion(false)}>
-                          Cancel
-                        </Button>
-                        <Button type="submit">Add to Bank</Button>
-                      </div>
-                    </form>
-                  </Card>
-                </div>
-              )}
-
-              {/* Questions List */}
-              {questions.length === 0 ? (
-                <Card style={{ padding: '32px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                  <p style={{ margin: '0 0 12px' }}>This bank doesn't have any questions yet.</p>
-                  <Button size="sm" onClick={() => setShowNewQuestion(true)}>
-                    + Add Your First Question
-                  </Button>
-                </Card>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  {questions.map((q, idx) => (
-                    <Card key={q.id} style={{ padding: '16px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                          <span style={{ fontWeight: 700, color: 'var(--text-muted)' }}>#{idx + 1}</span>
-                          <Badge variant="secondary">{q.qtype.toUpperCase()}</Badge>
-                          <Badge variant="primary">{q.points} pt{q.points !== 1 ? 's' : ''}</Badge>
-                          {q.tags.map((t, tIdx) => (
-                            <span key={tIdx} style={{ fontSize: '0.75rem', background: '#e2e8f0', padding: '2px 6px', borderRadius: '4px' }}>
-                              #{t}
-                            </span>
-                          ))}
-                        </div>
-                        <Button variant="danger" size="sm" onClick={() => handleDeleteQuestion(q.id)}>
-                          Delete
-                        </Button>
-                      </div>
-
-                      <div style={{ margin: '8px 0', fontSize: '1rem' }}>
-                        <RichText content={q.text} />
-                      </div>
-
-                      {q.options && q.options.length > 0 && (
-                        <div style={{ marginTop: '8px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                          {q.options.map((opt, oIdx) => {
-                            const isCorrect =
-                              q.qtype === 'single'
-                                ? Number(q.answer) === oIdx
-                                : Array.isArray(q.answer) && q.answer.includes(oIdx);
-                            return (
-                              <div
-                                key={oIdx}
-                                style={{
-                                  padding: '6px 10px',
-                                  borderRadius: '6px',
-                                  fontSize: '0.85rem',
-                                  background: isCorrect ? '#dcfce7' : 'var(--bg-muted, #f8fafc)',
-                                  border: isCorrect ? '1px solid #86efac' : '1px solid var(--border, #e2e8f0)',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '6px',
-                                }}
-                              >
-                                <strong>{String.fromCharCode(65 + oIdx)}.</strong>
-                                <RichText content={opt} />
-                                {isCorrect && <span style={{ marginLeft: 'auto', color: '#16a34a', fontWeight: 600 }}>✓</span>}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </Card>
-                  ))}
-                </div>
-              )}
+              {errors.options && <p className="text-sm text-destructive mt-1">{String(errors.options.message ?? '')}</p>}
             </div>
-          ) : (
-            <Card style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
-              Select a question bank on the left or create a new one.
-            </Card>
           )}
+
+          {qtype === 'numeric' && (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="answer-numeric">Correct Number</Label>
+                <Input
+                  id="answer-numeric"
+                  type="number"
+                  step="any"
+                  {...register('answer')}
+                  aria-invalid={!!errors.answer}
+                />
+                {errors.answer && <p className="text-sm text-destructive mt-1">{String(errors.answer.message ?? '')}</p>}
+              </div>
+              <div>
+                <Label htmlFor="tolerance">Tolerance (±)</Label>
+                <Input id="tolerance" type="number" step="any" min="0" {...register('tolerance')} />
+              </div>
+            </div>
+          )}
+
+          {qtype === 'short' && (
+            <div>
+              <Label htmlFor="answer-short">Correct Answer (String)</Label>
+              <Input id="answer-short" {...register('answer')} aria-invalid={!!errors.answer} />
+              {errors.answer && <p className="text-sm text-destructive mt-1">{String(errors.answer.message ?? '')}</p>}
+            </div>
+          )}
+
+          <div>
+            <Label htmlFor="tags">Tags (comma-separated)</Label>
+            <Input
+              id="tags"
+              placeholder="e.g. calculus, integrals, easy"
+              {...register('tags')}
+            />
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? 'Adding…' : 'Add to Bank'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Bank list (left panel) ─────────────────────────────────────────────────
+
+function BankList({
+  banks,
+  selectedId,
+  onSelect,
+  onDelete,
+}: {
+  banks: QuestionBank[];
+  selectedId: number | null;
+  onSelect: (bank: QuestionBank) => void;
+  onDelete: (bank: QuestionBank) => void;
+}) {
+  if (banks.length === 0) {
+    return (
+      <EmptyState
+        title="No question banks yet"
+        description="Create a bank to start organizing reusable questions."
+        action={
+          <Button size="sm">
+            <Plus className="size-4" /> Create first bank
+          </Button>
+        }
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {banks.map((b) => {
+        const isSelected = selectedId === b.id;
+        return (
+          <Card
+            key={b.id}
+            className={cn(
+              'cursor-pointer border-2 transition-all',
+              isSelected
+                ? 'border-primary bg-accent/50'
+                : 'border-transparent hover:border-muted',
+            )}
+            onClick={() => onSelect(b)}
+          >
+            <CardContent className="flex items-center justify-between p-4">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold">{b.name}</span>
+                  <Badge variant="secondary">{b.question_count ?? 0} Qs</Badge>
+                </div>
+                {b.description && (
+                  <p className="text-sm text-muted-foreground truncate">{b.description}</p>
+                )}
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete(b);
+                }}
+                aria-label={`Delete bank ${b.name}`}
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Questions table ────────────────────────────────────────────────────────
+
+interface QuestionsTableProps {
+  questions: BankQuestion[];
+  onDelete: (q: BankQuestion) => void;
+}
+
+function QuestionsTable({ questions, onDelete }: QuestionsTableProps) {
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [globalFilter, setGlobalFilter] = useState('');
+  const [sorting, setSorting] = useState<SortingState>([]);
+
+  const filtered = useMemo(() => {
+    let result = questions;
+    if (globalFilter.trim()) {
+      const q = globalFilter.toLowerCase();
+      result = result.filter(
+        (row) =>
+          row.text.toLowerCase().includes(q) ||
+          row.tags?.some((t) => t.toLowerCase().includes(q)),
+      );
+    }
+    return result;
+  }, [questions, globalFilter]);
+
+  const typeFilter = columnFilters.find((f) => f.id === 'qtype');
+  const typeValue = (typeFilter?.value as string) ?? 'all';
+
+  const table = useReactTable({
+    data: filtered,
+    columns: [
+      ...columns,
+      {
+        id: 'actions',
+        header: '',
+        cell: ({ row }) => (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onDelete(row.original)}
+            aria-label={`Delete question ${row.original.id}`}
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        ),
+        enableSorting: false,
+        size: 60,
+      },
+    ],
+    onColumnFiltersChange: setColumnFilters,
+    onGlobalFilterChange: setGlobalFilter,
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    state: { columnFilters, globalFilter, sorting },
+    initialState: { columnFilters: [] },
+    meta: { onDelete },
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+          <Input
+            placeholder="Search questions by text or tags..."
+            value={globalFilter}
+            onChange={(e) => setGlobalFilter(e.target.value)}
+            className="pl-10"
+          />
         </div>
+        <div className="flex items-center gap-2">
+          <Filter className="size-4 text-muted-foreground" />
+          <select
+            value={typeValue}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val === 'all') {
+                table.setColumnFilters([]);
+              } else {
+                table.setColumnFilters([{ id: 'qtype', value: val }]);
+              }
+            }}
+            className="rounded-[var(--radius-md)] border border-[var(--line-strong)] bg-card px-3 py-2 text-sm focus:outline-none focus:ring-[3px] focus:ring-ring/40"
+          >
+            <option value="all">All types</option>
+            <option value="single">Single Choice</option>
+            <option value="multiple">Multiple Choice</option>
+            <option value="short">Short Answer</option>
+            <option value="numeric">Numeric</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto rounded-[var(--radius-lg)] border">
+        <table className="w-full border-collapse text-sm">
+          <thead>
+            {table.getHeaderGroups().map((hg) => (
+              <tr key={hg.id}>
+                {hg.headers.map((header) => (
+                  <th
+                    key={header.id}
+                    className="bg-muted px-4 py-2.5 text-left font-semibold text-muted-foreground uppercase text-xs"
+                    style={{ width: header.getSize() }}
+                  >
+                    {header.isPlaceholder
+                      ? null
+                      : flexRender(header.column.columnDef.header, header.getContext())}
+                  </th>
+                ))}
+              </tr>
+            ))}
+          </thead>
+          <tbody>
+            {table.getRowModel().rows.length === 0 ? (
+              <tr>
+                <td colSpan={table.getAllColumns().length} className="p-8 text-center text-muted-foreground">
+                  No questions match your filters.
+                </td>
+              </tr>
+            ) : (
+              table.getRowModel().rows.map((row) => (
+                <tr key={row.id} className="border-t border-border hover:bg-muted/50">
+                  {row.getVisibleCells().map((cell) => (
+                    <td key={cell.id} className="px-4 py-3 align-top">
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </td>
+                  ))}
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );
-};
+}
+
+// ─── Main page ──────────────────────────────────────────────────────────────
+
+export function QuestionBankPage() {
+  const { courseId } = useParams<{ courseId: string }>();
+  const cId = Number(courseId);
+
+  const { data: banksData, isLoading: banksLoading, isError: banksError, error: banksErr } = useBanks(cId);
+  const [selectedBank, setSelectedBank] = useState<QuestionBank | null>(null);
+
+  const selectedBankId = selectedBank?.id ?? 0;
+  const {
+    data: bankData,
+    isLoading: bankLoading,
+    isError: bankError,
+    error: bankErr,
+  } = useBank(selectedBankId, { enabled: !!selectedBankId });
+
+  const queryClient = useQueryClient();
+
+  // Auto-select first bank when banks load
+  useEffect(() => {
+    if (banksData?.banks?.length && !selectedBank) {
+      setSelectedBank(banksData.banks[0]!);
+    }
+  }, [banksData, selectedBank]);
+
+  const handleSelectBank = (bank: QuestionBank) => {
+    setSelectedBank(bank);
+  };
+
+  const handleDeleteBank = async (bank: QuestionBank) => {
+    if (!confirm('Are you sure you want to delete this question bank?')) return;
+    try {
+      await api.del(`/banks/${bank.id}`);
+      await queryClient.invalidateQueries({ queryKey: qk.banks(cId) });
+      if (selectedBank?.id === bank.id) setSelectedBank(null);
+      toast.success('Bank deleted', { description: bank.name });
+    } catch (err: any) {
+      toast.error('Failed to delete bank', { description: err.message });
+    }
+  };
+
+  const handleDeleteQuestion = async (q: BankQuestion) => {
+    if (!selectedBank) return;
+    if (!confirm('Delete this question?')) return;
+    try {
+      await api.del(`/banks/${selectedBank.id}/questions/${q.id}`);
+      await queryClient.invalidateQueries({ queryKey: qk.bank(selectedBank.id) });
+      toast.success('Question deleted');
+    } catch (err: any) {
+      toast.error('Failed to delete question', { description: err.message });
+    }
+  };
+
+  const [showNewBank, setShowNewBank] = useState(false);
+  const [showNewQuestion, setShowNewQuestion] = useState(false);
+
+  return (
+    <div className="min-h-[100dvh]">
+      <Page
+        title="Question Banks"
+        description="Organize reusable question repositories with LaTeX math support and batch JSON import/export."
+        actions={
+          <div className="flex items-center gap-2">
+            <Button asChild variant="secondary" size="sm">
+              <Link to={`/courses/${cId}`}>
+                <ChevronLeft className="size-4" />
+                Back to Course
+              </Link>
+            </Button>
+            <Button size="sm" onClick={() => setShowNewBank(true)}>
+              <Plus className="size-4" /> New Bank
+            </Button>
+          </div>
+        }
+        width="wide"
+      >
+        <div className="grid grid-cols-1 gap-8 lg:grid-cols-[320px_1fr]">
+          {/* Left: Banks */}
+          <div>
+            <h2 className="font-display text-lg font-semibold mb-4">All Banks</h2>
+            {banksLoading ? (
+              <LoadingSkeleton variant="list" rows={4} />
+            ) : banksError ? (
+              <ErrorState
+                title="Could not load banks"
+                error={banksErr}
+                onRetry={() => queryClient.invalidateQueries({ queryKey: qk.banks(cId) })}
+              />
+            ) : (
+              <BankList
+                banks={banksData?.banks ?? []}
+                selectedId={selectedBank?.id ?? null}
+                onSelect={handleSelectBank}
+                onDelete={handleDeleteBank}
+              />
+            )}
+          </div>
+
+          {/* Right: Questions */}
+          <div>
+            {selectedBank ? (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="font-display text-xl font-semibold">{selectedBank.name}</h2>
+                    <p className="text-sm text-muted-foreground">
+                      {bankData?.questions?.length ?? 0} questions in this bank
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => setShowNewQuestion(true)}
+                    >
+                      <ListPlus className="size-4" /> Add Question
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => handleDeleteBank(selectedBank)}
+                    >
+                      <Trash2 className="size-4" /> Delete Bank
+                    </Button>
+                  </div>
+                </div>
+
+                <Separator />
+
+                {bankLoading ? (
+                  <LoadingSkeleton variant="list" rows={5} />
+                ) : bankError ? (
+                  <ErrorState
+                    title="Could not load questions"
+                    error={bankErr}
+                    onRetry={() => queryClient.invalidateQueries({ queryKey: qk.bank(selectedBank.id) })}
+                  />
+                ) : (
+                  <QuestionsTable
+                    questions={bankData?.questions ?? []}
+                    onDelete={handleDeleteQuestion}
+                  />
+                )}
+              </div>
+            ) : (
+              <EmptyState
+                icon={HelpCircle}
+                title="Select a question bank"
+                description="Choose a bank from the left, or create a new one to get started."
+              />
+            )}
+          </div>
+        </div>
+      </Page>
+
+      <NewBankForm open={showNewBank} onOpenChange={setShowNewBank} courseId={cId} />
+
+      {selectedBank && (
+        <NewQuestionForm
+          open={showNewQuestion}
+          onOpenChange={setShowNewQuestion}
+          bankId={selectedBank.id}
+        />
+      )}
+    </div>
+  );
+}
+

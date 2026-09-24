@@ -25,7 +25,8 @@ to working code.
 ## Repo layout
 
 ```
-package.json          # npm workspaces; dev/seed/build/typecheck scripts; allowScripts: esbuild
+package.json          # pnpm workspaces; dev/seed/build/typecheck scripts
+pnpm-workspace.yaml   # workspace globs + onlyBuiltDependencies: esbuild
 apps/
   api/                # Express + TypeScript on Node 24 node:sqlite (no native deps)
     src/              # server, db/schema, auth (scrypt+JWT), repo, services (grading/attempts/policy), routes
@@ -43,21 +44,21 @@ lab5/
 
 ## Quickstart
 
-Prerequisites: Node **24** (for `node:sqlite`), npm **11**.
+Prerequisites: Node **24** (for `node:sqlite`), pnpm **10+** (`corepack enable` provides it).
 
 ```bash
-npm install           # workspaces; esbuild postinstall allowed via package.json "allowScripts"
-npm run seed          # (re)build data/interval.db with demo data
-npm run dev:api       # API dev server on http://localhost:4000 (tsx watch)
-npm run dev:web       # web dev server on http://localhost:5173 (/api proxied to :4000)
+pnpm install          # installs all workspaces; esbuild is allow-listed in pnpm-workspace.yaml
+pnpm run seed         # (re)build data/interval.db with demo data
+pnpm run dev:api      # API dev server on http://localhost:4000 (tsx watch)
+pnpm run dev:web      # web dev server on http://localhost:5173 (/api proxied to :4000)
 ```
 
 Other scripts:
 
 ```bash
-npm run build         # tsc (api) + tsc & vite build (web) -> apps/web/dist
-npm run start:web     # serve the built web app on :5174
-npm run typecheck     # tsc --noEmit for both workspaces
+pnpm run build        # tsc (api) + tsc & vite build (web) -> apps/web/dist
+pnpm run start:web    # serve the built web app on :5174
+pnpm run typecheck    # tsc --noEmit for both workspaces
 ```
 
 ### Demo accounts (seed data)

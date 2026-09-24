@@ -1,11 +1,27 @@
 import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import type { Request, Response, NextFunction } from 'express';
+import type { CourseRole } from './types.js';
 
 const PASSWORD_SECRET =
   process.env.INTERVAL_PASSWORD_PEPPER ?? 'interval-dev-pepper-change-me';
 const JWT_SECRET =
   process.env.INTERVAL_JWT_SECRET ?? 'interval-dev-jwt-secret-change-me';
+
+/**
+ * Refuse to boot in production with the built-in dev secrets. Call once at startup.
+ */
+export function assertSecretsConfigured(): void {
+  if (process.env.NODE_ENV !== 'production') return;
+  const missing: string[] = [];
+  if (!process.env.INTERVAL_JWT_SECRET) missing.push('INTERVAL_JWT_SECRET');
+  if (!process.env.INTERVAL_PASSWORD_PEPPER) missing.push('INTERVAL_PASSWORD_PEPPER');
+  if (missing.length) {
+    throw new Error(
+      `Refusing to boot: set ${missing.join(' and ')} in production (dev defaults are insecure).`,
+    );
+  }
+}
 
 export function hashPassword(password: string): string {
   const salt = crypto.randomBytes(16).toString('hex');
@@ -48,6 +64,7 @@ export function verifyToken(token: string): TokenPayload | null {
 export interface AuthedRequest extends Request {
   userId?: number;
   userRole?: TokenPayload['role'];
+  courseRole?: CourseRole;
 }
 
 export function requireAuth(req: AuthedRequest, res: Response, next: NextFunction): void {

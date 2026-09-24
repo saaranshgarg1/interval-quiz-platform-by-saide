@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth, AppError, type AuthedRequest } from '../auth.js';
 import { courseRepo, quizVersionRepo, analyticsRepo } from '../repo.js';
+import { assertStaff } from '../authz.js';
 
 export const analyticsRouter = Router();
 
@@ -12,13 +13,7 @@ analyticsRouter.get('/version/:versionId', (req: AuthedRequest, res) => {
   const version = quizVersionRepo.get(versionId);
   if (!version) throw new AppError(404, 'Quiz version not found.');
 
-  const userId = req.userId as number;
-  if (req.userRole !== 'admin') {
-    const role = courseRepo.courseRole(version.course_id, userId);
-    if (role !== 'instructor' && role !== 'ta') {
-      throw new AppError(403, 'Only instructors and TAs can view quiz analytics.');
-    }
-  }
+  assertStaff(req, version.course_id);
 
   const analytics = analyticsRepo.getQuizAnalytics(versionId);
   res.json({ analytics });

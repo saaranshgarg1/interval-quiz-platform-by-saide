@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAuth, AppError } from '../auth.js';
 import type { AuthedRequest } from '../auth.js';
 import { attemptRepo, quizVersionRepo, courseRepo, resultRepo } from '../repo.js';
+import { assertStaff } from '../authz.js';
 import {
   startAttempt,
   buildAttemptView,
@@ -67,7 +68,7 @@ attemptsRouter.put('/:attemptId/answers', (req: AuthedRequest, res) => {
   const attempt = ensureOwner(req, Number(req.params.attemptId));
   const payload = req.body ?? {};
   if (!Array.isArray(payload.answers)) throw new AppError(400, 'answers array is required.');
-  const result = saveAnswers(attempt.id, req.userId as number, {
+  const result = saveAnswers(req.userId as number, attempt.id, {
     answers: payload.answers,
   });
   res.json({ acks: result.acks, attempt: result.attempt });
@@ -75,7 +76,7 @@ attemptsRouter.put('/:attemptId/answers', (req: AuthedRequest, res) => {
 
 attemptsRouter.post('/:attemptId/submit', (req: AuthedRequest, res) => {
   const attempt = ensureOwner(req, Number(req.params.attemptId));
-  res.json(submitAttempt(attempt.id, req.userId as number));
+  res.json(submitAttempt(req.userId as number, attempt.id));
 });
 
 attemptsRouter.post('/:attemptId/events', (req: AuthedRequest, res) => {
@@ -83,8 +84,8 @@ attemptsRouter.post('/:attemptId/events', (req: AuthedRequest, res) => {
   const { kind, detail } = req.body ?? {};
   if (!kind) throw new AppError(400, 'event kind is required.');
   const outcome = reportClientEvent(
-    attempt.id,
     req.userId as number,
+    attempt.id,
     String(kind),
     typeof detail === 'string' ? detail : null,
   );
@@ -99,10 +100,7 @@ attemptsRouter.get('/course/:courseId/incidents', (req: AuthedRequest, res) => {
   const courseId = Number(req.params.courseId);
   const course = courseRepo.get(courseId);
   if (!course) throw new AppError(404, 'Course not found.');
-  const role = courseRepo.courseRole(courseId, req.userId as number);
-  if (!role || role === 'student') {
-    if (req.userRole !== 'admin') throw new AppError(403, 'Staff access required.');
-  }
+  assertStaff(req, courseId);
   const versions = quizVersionRepo.activeVersionForCourse(courseId);
   const incidents = versions.flatMap((v) => {
     return attemptRepo.listForVersion(v.id)

@@ -18,9 +18,11 @@ export const db = new DatabaseSync(DB_PATH);
 
 db.exec('PRAGMA journal_mode = WAL;');
 db.exec('PRAGMA foreign_keys = ON;');
+// Block (don't error) when another connection holds a write lock — keeps
+// concurrent writers (e.g. parallel test processes) from hitting SQLITE_BUSY.
+db.exec('PRAGMA busy_timeout = 5000;');
 
-export function migrate() {
-  db.exec(`
+const BASELINE_SQL = `
     CREATE TABLE IF NOT EXISTS users (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       name          TEXT NOT NULL,
@@ -188,7 +190,64 @@ export function migrate() {
       created_at      TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE (course_id, user_id)
     );
-  `);
+  `;
+
+// __MIGRATIONS_BLOCK__
+
+interface Migration {
+  version: number;
+  name: string;
+  sql: string;
+}
+
+const MIGRATIONS: Migration[] = [
+  { version: 1, name: 'baseline', sql: BASELINE_SQL },
+  {
+    version: 2,
+    name: 'audit_log',
+    sql: `
+      CREATE TABLE IF NOT EXISTS audit_log (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        actor_id   INTEGER,
+        actor_role TEXT,
+        course_id  INTEGER,
+        action     TEXT NOT NULL,
+        target     TEXT,
+        before     TEXT,
+        after      TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_audit_course ON audit_log(course_id);
+      CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor_id);
+    `,
+  },
+];
+
+/** Apply pending migrations in order, each in its own transaction. Idempotent. */
+export function migrate(): void {
+  db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    version    INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );`);
+  const applied = new Set(
+    (db.prepare('SELECT version FROM schema_migrations').all() as { version: number }[]).map(
+      (r) => r.version,
+    ),
+  );
+  for (const m of MIGRATIONS) {
+    if (applied.has(m.version)) continue;
+    db.exec('BEGIN');
+    try {
+      db.exec(m.sql);
+      db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)').run(m.version, m.name);
+      db.exec('COMMIT');
+      console.log(`[interval-api][migrate] applied #${m.version} ${m.name}`);
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+  }
 }
 
 migrate();

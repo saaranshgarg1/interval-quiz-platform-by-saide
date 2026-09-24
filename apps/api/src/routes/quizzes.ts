@@ -9,23 +9,11 @@ import {
   attemptRepo,
 } from '../repo.js';
 import type { CourseRole, QuestionType } from '../types.js';
+import { assertStaff, assertInstructor, writeAudit } from '../authz.js';
 
 export const quizzesRouter = Router();
 
 quizzesRouter.use(requireAuth);
-
-function roleInCourse(req: AuthedRequest, courseId: number): CourseRole | 'admin' {
-  if (req.userRole === 'admin') return 'admin';
-  const role = courseRepo.courseRole(courseId, req.userId as number);
-  if (!role) throw new AppError(403, 'You are not enrolled in this course.');
-  return role;
-}
-
-function staffRole(role: CourseRole | 'admin'): void {
-  if (role !== 'instructor' && role !== 'ta' && role !== 'admin') {
-    throw new AppError(403, 'Only course staff can do this.');
-  }
-}
 
 function versionDetail(versionId: number, viewerId: number, role: CourseRole | 'admin') {
   const version = quizVersionRepo.get(versionId);
@@ -102,7 +90,7 @@ function summarizeAttemptsForVersion(versionId: number) {
 
 quizzesRouter.get('/course/:courseId', (req: AuthedRequest, res) => {
   const courseId = Number(req.params.courseId);
-  const role = roleInCourse(req, courseId);
+  const role = assertStaff(req, courseId);
   const isStaff = role !== 'student';
 
   const quizzes = quizRepo.listForCourse(courseId).map((quiz) => {
@@ -123,8 +111,7 @@ quizzesRouter.get('/course/:courseId', (req: AuthedRequest, res) => {
 
 quizzesRouter.post('/course/:courseId', (req: AuthedRequest, res) => {
   const courseId = Number(req.params.courseId);
-  const role = roleInCourse(req, courseId);
-  staffRole(role);
+  const role = assertStaff(req, courseId);
   const quizId = quizRepo.create(courseId, req.userId as number);
   const versionId = quizVersionRepo.createDraft(quizId, courseId, req.userId as number, 1);
   res.status(201).json(versionDetail(versionId, req.userId as number, role));
@@ -135,7 +122,7 @@ quizzesRouter.post('/course/:courseId', (req: AuthedRequest, res) => {
 quizzesRouter.get('/:quizId', (req: AuthedRequest, res) => {
   const quiz = quizRepo.get(Number(req.params.quizId));
   if (!quiz) throw new AppError(404, 'Quiz not found.');
-  const role = roleInCourse(req, quiz.course_id);
+  const role = assertStaff(req, quiz.course_id);
   const versions = quizVersionRepo.listForQuiz(quiz.id)
     .filter((v) => role === 'student' ? v.status === 'published' || v.status === 'archived' : true)
     .map((v) => versionDetail(v.id, req.userId as number, role));
@@ -147,8 +134,7 @@ quizzesRouter.get('/:quizId', (req: AuthedRequest, res) => {
 quizzesRouter.put('/:quizId', (req: AuthedRequest, res) => {
   const quiz = quizRepo.get(Number(req.params.quizId));
   if (!quiz) throw new AppError(404, 'Quiz not found.');
-  const role = roleInCourse(req, quiz.course_id);
-  staffRole(role);
+  const role = assertStaff(req, quiz.course_id);
   const draft = quizVersionRepo.latest(quiz.id);
   if (!draft || draft.status !== 'draft') {
     throw new AppError(409, 'Only the latest draft version can be edited. Create a new draft version.');
@@ -192,8 +178,7 @@ quizzesRouter.put('/:quizId', (req: AuthedRequest, res) => {
 quizzesRouter.post('/:quizId/versions', (req: AuthedRequest, res) => {
   const quiz = quizRepo.get(Number(req.params.quizId));
   if (!quiz) throw new AppError(404, 'Quiz not found.');
-  const role = roleInCourse(req, quiz.course_id);
-  staffRole(role);
+  const role = assertStaff(req, quiz.course_id);
   const newDraft = quizVersionRepo.clonePublished(quiz.id, req.userId as number);
   res.status(201).json(versionDetail(newDraft.id, req.userId as number, role));
 });
@@ -203,13 +188,13 @@ quizzesRouter.post('/:quizId/versions', (req: AuthedRequest, res) => {
 quizzesRouter.patch('/:quizId/publish', (req: AuthedRequest, res) => {
   const quiz = quizRepo.get(Number(req.params.quizId));
   if (!quiz) throw new AppError(404, 'Quiz not found.');
-  const role = roleInCourse(req, quiz.course_id);
-  staffRole(role);
+  const role = assertInstructor(req, quiz.course_id);
   const draft = quizVersionRepo.latest(quiz.id);
   if (!draft || draft.status !== 'draft') throw new AppError(409, 'No draft version to publish.');
   const questions = questionRepo.listForVersion(draft.id);
   if (questions.length === 0) throw new AppError(400, 'Add at least one question before publishing.');
   quizVersionRepo.publish(draft.id);
+  writeAudit(req, { action: 'quiz.publish', course_id: quiz.course_id, target: 'quiz:' + quiz.id });
   res.json(versionDetail(draft.id, req.userId as number, role));
 });
 
@@ -272,8 +257,7 @@ function validateQuestionData(data: {
 function editableDraft(req: AuthedRequest, quizId: number) {
   const quiz = quizRepo.get(quizId);
   if (!quiz) throw new AppError(404, 'Quiz not found.');
-  const role = roleInCourse(req, quiz.course_id);
-  staffRole(role);
+  const role = assertStaff(req, quiz.course_id);
   const draft = quizVersionRepo.latest(quiz.id);
   if (!draft || draft.status !== 'draft') {
     throw new AppError(409, 'Only the latest draft version is editable.');
@@ -351,8 +335,7 @@ quizzesRouter.post('/:quizId/questions/reorder', (req: AuthedRequest, res) => {
 quizzesRouter.get('/:quizId/preview', (req: AuthedRequest, res) => {
   const quiz = quizRepo.get(Number(req.params.quizId));
   if (!quiz) throw new AppError(404, 'Quiz not found.');
-  const role = roleInCourse(req, quiz.course_id);
-  staffRole(role);
+  const role = assertStaff(req, quiz.course_id);
   const draft = quizVersionRepo.latest(quiz.id);
   if (!draft) throw new AppError(404, 'No version to preview.');
   const questions = questionRepo.listForVersion(draft.id);

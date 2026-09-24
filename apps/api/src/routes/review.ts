@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { requireAuth, AppError } from '../auth.js';
 import type { AuthedRequest } from '../auth.js';
-import { db } from '../db.js';
-import { attemptRepo, quizVersionRepo, courseRepo, policyRepo, reviewRepo, userRepo, pubUser, answerRepo } from '../repo.js';
+import { attemptRepo, quizVersionRepo, policyRepo, reviewRepo, userRepo, pubUser, answerRepo } from '../repo.js';
 import { reviewAttempt, buildAttemptView } from '../services/attempts.js';
 import { jsonParse } from '../util.js';
 import type { AnswerRevision } from '../types.js';
+import { assertStaff, assertInstructor, writeAudit } from '../authz.js';
 
 export const reviewRouter = Router();
 
@@ -16,10 +16,7 @@ function staffForAttempt(req: AuthedRequest, attemptId: number) {
   if (!attempt) throw new AppError(404, 'Attempt not found.');
   const version = quizVersionRepo.get(attempt.quiz_version_id);
   if (!version) throw new AppError(404, 'Quiz version not found.');
-  const role = courseRepo.courseRole(version.course_id, req.userId as number);
-  if ((!role || role === 'student') && req.userRole !== 'admin') {
-    throw new AppError(403, 'Staff access required.');
-  }
+  assertStaff(req, version.course_id);
   return { attempt, version };
 }
 
@@ -63,7 +60,9 @@ function answerRows(attemptId: number): AnswerRevision[] {
 reviewRouter.post('/attempt/:attemptId', (req: AuthedRequest, res) => {
   const attempt = attemptRepo.get(Number(req.params.attemptId));
   if (!attempt) throw new AppError(404, 'Attempt not found.');
-  void staffForAttempt(req, attempt.id);
+  const version = quizVersionRepo.get(attempt.quiz_version_id);
+  if (!version) throw new AppError(404, 'Quiz version not found.');
+  assertInstructor(req, version.course_id);
   const { decision, reason } = req.body ?? {};
   if (!['reinstate', 'lock', 'allow_submit'].includes(decision)) {
     throw new AppError(400, "decision must be 'reinstate', 'lock' or 'allow_submit'.");
@@ -74,17 +73,11 @@ reviewRouter.post('/attempt/:attemptId', (req: AuthedRequest, res) => {
     String(decision),
     typeof reason === 'string' && reason.trim() ? reason : null,
   );
+  writeAudit(req, { action: 'attempt.ruling', course_id: version.course_id, target: 'attempt:' + attempt.id, after: { decision, reason } });
   res.json(outcome);
 });
 
 reviewRouter.get('/attempt/:attemptId/current', (req: AuthedRequest, res) => {
-  const attempt = attemptRepo.get(Number(req.params.attemptId));
-  if (!attempt) throw new AppError(404, 'Attempt not found.');
-  const version = quizVersionRepo.get(attempt.quiz_version_id);
-  if (!version) throw new AppError(404, 'Quiz version not found.');
-  const role = courseRepo.courseRole(version.course_id, req.userId as number);
-  if ((!role || role === 'student') && req.userRole !== 'admin') {
-    throw new AppError(403, 'Staff access required.');
-  }
+  const { attempt } = staffForAttempt(req, Number(req.params.attemptId));
   res.json(buildAttemptView(attempt.id));
 });

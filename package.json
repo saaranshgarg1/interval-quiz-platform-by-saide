@@ -3,22 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "description": "Interval — quiz portal for the sAIDE website (IIT Ropar). From-scratch graded & practice assessments.",
-  "allowScripts": {
-    "esbuild": true
-  },
-  "workspaces": [
-    "apps/*"
-  ],
+  "packageManager": "pnpm@12.3.4",
   "scripts": {
-    "dev:api": "npm run dev --workspace @interval/api",
-    "dev:web": "npm run dev --workspace @interval/web",
-    "build:api": "npm run build --workspace @interval/api",
-    "build:web": "npm run build --workspace @interval/web",
-    "build": "npm run build:api && npm run build:web",
-    "seed": "npm run seed --workspace @interval/api",
-    "start:api": "npm run start --workspace @interval/api",
-    "start:web": "npm run preview --workspace @interval/web",
-    "test": "npm run test --workspace @interval/api",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "dev:api": "pnpm --filter @interval/api dev",
+    "dev:web": "pnpm --filter @interval/web dev",
+    "build:api": "pnpm --filter @interval/api build",
+    "build:web": "pnpm --filter @interval/web build",
+    "build": "pnpm run build:api && pnpm run build:web",
+    "seed": "pnpm --filter @interval/api seed",
+    "start:api": "pnpm --filter @interval/api start",
+    "start:web": "pnpm --filter @interval/web preview",
+    "test": "pnpm --filter @interval/api test",
+    "typecheck": "pnpm -r run typecheck"
   }
 }

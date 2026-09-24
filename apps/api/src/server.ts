@@ -1,5 +1,8 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import { fileURLToPath } from 'node:url';
 import { db, migrate } from './db.js';
 import { attemptRepo } from './repo.js';
 import { authRouter } from './routes/auth.js';
@@ -11,7 +14,8 @@ import { reviewRouter } from './routes/review.js';
 import { banksRouter } from './routes/banks.js';
 import { accommodationsRouter } from './routes/accommodations.js';
 import { analyticsRouter } from './routes/analytics.js';
-import { errorHandler } from './auth.js';
+import { adminRouter } from './routes/admin.js';
+import { errorHandler, assertSecretsConfigured } from './auth.js';
 
 process.on('unhandledRejection', (reason) => {
   console.error('[interval-api][unhandledRejection]', reason);
@@ -20,6 +24,7 @@ process.on('uncaughtException', (err) => {
   console.error('[interval-api][uncaughtException]', err);
 });
 
+assertSecretsConfigured();
 migrate();
 
 // Reconcile expired attempts on startup so a browser that disappears still
@@ -37,10 +42,43 @@ for (const row of stale) {
 }
 
 const app = express();
-app.use(cors());
+
+// Trust the reverse proxy in front of us so rate-limit sees real client IPs.
+app.set('trust proxy', 1);
+
+app.use(helmet());
+
+// CORS: explicit allow-list. Origins come from INTERVAL_WEB_ORIGIN (comma-separated);
+// defaults cover the local Vite dev server. A same-origin/no-origin request (curl,
+// server-to-server) is allowed; a disallowed browser origin is rejected.
+const ALLOWED_ORIGINS = (
+  process.env.INTERVAL_WEB_ORIGIN ?? 'http://localhost:5173,http://127.0.0.1:5173'
+)
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+app.use(
+  cors({
+    origin(origin, cb) {
+      if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+      cb(new Error(`Origin ${origin} is not allowed by CORS.`));
+    },
+    credentials: true,
+  }),
+);
+
 app.use(express.json({ limit: '512kb' }));
 
-app.use('/api/auth', authRouter);
+// Throttle the credential endpoints (login / register / sso) against brute force.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.INTERVAL_AUTH_RATE_MAX ?? 50),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts. Please wait and try again.' },
+});
+
+app.use('/api/auth', authLimiter, authRouter);
 app.use('/api/courses', coursesRouter);
 app.use('/api/quizzes', quizzesRouter);
 app.use('/api/attempts', attemptsRouter);
@@ -49,6 +87,7 @@ app.use('/api/review', reviewRouter);
 app.use('/api/banks', banksRouter);
 app.use('/api/accommodations', accommodationsRouter);
 app.use('/api/analytics', analyticsRouter);
+app.use('/api/admin', adminRouter);
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, service: 'interval-api', time: new Date().toISOString() });
@@ -56,7 +95,13 @@ app.get('/api/health', (_req, res) => {
 
 app.use(errorHandler);
 
-const PORT = Number(process.env.PORT ?? 4000);
-app.listen(PORT, () => {
-  console.log(`[interval-api] listening on http://localhost:${PORT}`);
-});
+export { app };
+
+// Only bind a port when run as the entrypoint; test files import `app` directly.
+const isMain = process.argv[1] === fileURLToPath(import.meta.url);
+if (isMain) {
+  const PORT = Number(process.env.PORT ?? 4000);
+  app.listen(PORT, () => {
+    console.log(`[interval-api] listening on http://localhost:${PORT}`);
+  });
+}

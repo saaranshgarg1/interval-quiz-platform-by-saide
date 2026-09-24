@@ -1,56 +1,328 @@
-import React, { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { api } from '../api';
-import type { QuizAnalytics } from '../types';
-import { Button, Card, Badge, Pill, formatDateTime, statusLabel } from '../components/ui';
-import { RichText } from '../components/RichText';
+import { useState } from 'react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
+import {
+  BarChart3,
+  ClipboardList,
+  Download,
+  ArrowLeft,
+  ChevronsUpDown,
+  CheckCircle,
+  Clock,
+  Lock,
+  AlertCircle,
+} from 'lucide-react';
+import { useAnalytics } from '../lib/queries';
+import type { QuestionAnalyticsItem, SubmissionItem, ScoreBucket } from '../types';
+import { formatDateTime, statusLabel } from '../components/ui';
+import { Page, EmptyState, ErrorState, LoadingSkeleton } from '../components/primitives';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  flexRender,
+  getCoreRowModel,
+  getSortedRowModel,
+  useReactTable,
+  type ColumnDef,
+  type SortingState,
+} from '@tanstack/react-table';
+
+/* ── helpers ──────────────────────────────────────────────────────────── */
+
+function safeNumber(value: string | undefined): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+/** Discrimination index rating + tinted warning badge for low items. */
+function discriminationBadge(d: number): { label: string; variant: 'default' | 'secondary' | 'warning' | 'destructive' } {
+  if (d >= 0.4) return { label: 'Excellent', variant: 'default' };
+  if (d >= 0.2) return { label: 'Good', variant: 'secondary' };
+  if (d >= 0.1) return { label: 'Low', variant: 'warning' };
+  return { label: 'Poor', variant: 'destructive' };
+}
+
+/** Accuracy rate rating for color-free text + tinted badge. */
+function accuracyBadge(a: number): { label: string; variant: 'default' | 'secondary' | 'warning' | 'destructive' } {
+  const pct = Math.round(a * 100);
+  if (pct >= 70) return { label: 'High', variant: 'default' };
+  if (pct >= 40) return { label: 'Moderate', variant: 'secondary' };
+  return { label: 'Low', variant: 'warning' };
+}
+
+/* ── stat cards ───────────────────────────────────────────────────────── */
+
+interface StatCardProps {
+  icon: React.ReactNode;
+  label: string;
+  value: React.ReactNode;
+  sub?: React.ReactNode;
+  tone?: 'default' | 'primary' | 'muted';
+}
+
+function StatCard({ icon, label, value, sub, tone = 'default' }: StatCardProps) {
+  const toneClasses = {
+    default: 'text-foreground',
+    primary: 'text-primary',
+    muted: 'text-muted-foreground',
+  };
+  return (
+    <Card>
+      <CardContent className="stat-card">
+        <span className="stat-icon" aria-hidden="true">
+          {icon}
+        </span>
+        <div className="flex-1 truncate">
+          <div className="muted small">{label}</div>
+          <div className={`stat-value ${toneClasses[tone]}`}>{value}</div>
+          {sub && <div className="muted small">{sub}</div>}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ── score distribution chart (div/SVG bars, teal tokens) ────────────── */
+
+function ScoreDistribution({ buckets }: { buckets: ScoreBucket[] }) {
+  const max = Math.max(...buckets.map((b) => b.count), 1);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Score distribution</CardTitle>
+        <CardDescription>
+          Histogram of submitted scores grouped into ranges.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {buckets.length === 0 ? (
+          <EmptyState
+            icon={BarChart3}
+            title="No score data"
+            description="Score buckets will appear once submissions are recorded."
+          />
+        ) : (
+          <div className="relative mt-4 flex items-end justify-between gap-3 pb-2" role="img" aria-label="Score distribution histogram">
+            {buckets.map((bucket, idx) => {
+              const heightPct = Math.round((bucket.count / max) * 100);
+              const barHeight = Math.max(heightPct, 6);
+              return (
+                <div key={idx} className="flex flex-col items-center gap-1.5">
+                  <span
+                    className="text-xs font-semibold text-muted-foreground"
+                    aria-label={`${bucket.count} submissions`}
+                  >
+                    {bucket.count}
+                  </span>
+                  <div
+                    className="w-8 rounded-t-[var(--radius-sm)] transition-[height] duration-300 ease-out"
+                    style={{
+                      height: `${barHeight}%`,
+                      minHeight: '24px',
+                      backgroundColor: bucket.count > 0 ? 'var(--primary)' : 'var(--muted)',
+                    }}
+                    aria-hidden="true"
+                  />
+                  <span className="text-[0.65rem] text-muted-foreground">{bucket.range}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ── per-question analytics table ────────────────────────────────────── */
+
+const questionColumns: ColumnDef<QuestionAnalyticsItem>[] = [
+  {
+    accessorKey: 'order_index',
+    header: '#',
+    cell: ({ getValue }) => <span className="font-mono text-muted-foreground">{(getValue() as number) + 1}</span>,
+    enableSorting: false,
+    size: 40,
+  },
+  {
+    accessorKey: 'text',
+    header: 'Question',
+    cell: ({ getValue }) => {
+      const text = getValue() as string;
+      return <span className="block max-w-xs truncate" title={text}>{text}</span>;
+    },
+  },
+  {
+    accessorKey: 'qtype',
+    header: 'Type',
+    cell: ({ getValue }) => {
+      const qtype = getValue() as string;
+      return <Badge variant="secondary">{qtype.toUpperCase()}</Badge>;
+    },
+    size: 90,
+  },
+  {
+    accessorKey: 'points',
+    header: 'Points',
+    size: 70,
+  },
+  {
+    accessorKey: 'accuracy_rate',
+    header: 'Accuracy',
+    cell: ({ getValue }) => {
+      const rate = getValue() as number;
+      const pct = Math.round(rate * 100);
+      const badge = accuracyBadge(rate);
+      return (
+        <div className="flex items-center gap-2">
+          <div className="h-1.5 w-16 rounded bg-muted overflow-hidden">
+            <div
+              className="h-full rounded"
+              style={{
+                width: `${pct}%`,
+                backgroundColor: pct >= 70 ? 'var(--success)' : pct >= 40 ? 'var(--warning)' : 'var(--destructive)',
+              }}
+              aria-hidden="true"
+            />
+          </div>
+          <Badge variant={badge.variant}>{pct}%</Badge>
+        </div>
+      );
+    },
+    size: 120,
+  },
+  {
+    accessorKey: 'discrimination_index',
+    header: 'Discrimination',
+    cell: ({ getValue }) => {
+      const d = getValue() as number;
+      const badge = discriminationBadge(d);
+      return (
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-sm">{d.toFixed(2)}</span>
+          <Badge variant={badge.variant}>{badge.label}</Badge>
+        </div>
+      );
+    },
+    size: 140,
+  },
+];
+
+/* ── submissions table (react-table, sortable) ───────────────────────── */
+
+const submissionColumns: ColumnDef<SubmissionItem>[] = [
+  {
+    accessorKey: 'user_name',
+    header: 'Student',
+    cell: ({ row }) => {
+      const s = row.original;
+      return (
+        <div>
+          <div className="font-medium">{s.user_name}</div>
+          <div className="text-sm text-muted-foreground">{s.user_email}</div>
+        </div>
+      );
+    },
+  },
+  {
+    accessorKey: 'status',
+    header: 'Status',
+    cell: ({ getValue }) => {
+      const status = getValue() as string;
+      const sl = statusLabel(status);
+      const iconMap: Record<string, React.ReactNode> = {
+        submitted: <CheckCircle className="size-3" />,
+        in_progress: <Clock className="size-3" />,
+        locked: <Lock className="size-3" />,
+        under_review: <AlertCircle className="size-3" />,
+      };
+      return (
+        <Badge
+          variant={
+            sl.tone === 'ok'
+              ? 'success'
+              : sl.tone === 'warn'
+                ? 'warning'
+                : sl.tone === 'danger'
+                  ? 'destructive'
+                  : 'secondary'
+          }
+        >
+          {iconMap[status] ?? null}
+          {sl.label}
+        </Badge>
+      );
+    },
+    size: 130,
+  },
+  {
+    accessorKey: 'score',
+    header: 'Score',
+    cell: ({ row }) => {
+      const s = row.original;
+      return s.score !== null ? (
+        <span className="font-medium">
+          {s.score} / {s.max_score}
+        </span>
+      ) : (
+        <span className="text-muted-foreground">—</span>
+      );
+    },
+    size: 100,
+  },
+  {
+    accessorKey: 'submitted_at',
+    header: 'Submitted',
+    cell: ({ getValue }) => {
+      const v = getValue() as string | null;
+      return <span className="text-sm text-muted-foreground">{formatDateTime(v)}</span>;
+    },
+    size: 140,
+  },
+  {
+    accessorKey: 'receipt',
+    header: 'Receipt',
+    cell: ({ getValue }) => {
+      const r = getValue() as string | null;
+      return r ? <code className="text-xs">{r}</code> : <span className="text-muted-foreground">—</span>;
+    },
+    size: 120,
+  },
+  {
+    id: 'action',
+    header: '',
+    enableSorting: false,
+    cell: ({ row }) => {
+      const s = row.original;
+      const isReview = s.status === 'locked' || s.status === 'under_review';
+      return (
+        <Button asChild variant="secondary" size="sm">
+          <Link to={isReview ? `/incidents/attempt/${s.attempt_id}` : `/results/attempt/${s.attempt_id}`}>
+            {isReview ? 'Review incident' : 'View result'}
+          </Link>
+        </Button>
+      );
+    },
+    size: 130,
+  },
+];
+
+/* ── main page ───────────────────────────────────────────────────────── */
 
 export const AnalyticsPage: React.FC = () => {
   const { versionId } = useParams<{ versionId: string }>();
-  const vId = Number(versionId);
+  const vId = safeNumber(versionId);
+  const navigate = useNavigate();
 
-  const [analytics, setAnalytics] = useState<QuizAnalytics | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data: analytics, error, isError, isLoading, refetch } = useAnalytics(vId, {
+    staleTime: 30_000,
+  });
 
-  useEffect(() => {
-    if (!vId) return;
-    const fetchAnalytics = async () => {
-      try {
-        setLoading(true);
-        const res = await api.get<{ analytics: QuizAnalytics }>(`/analytics/version/${vId}`);
-        setAnalytics(res.analytics);
-      } catch (err: any) {
-        setError(err.message || 'Failed to load quiz analytics.');
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchAnalytics();
-  }, [vId]);
-
-  if (loading) {
-    return (
-      <div style={{ maxWidth: '1000px', margin: '40px auto', textAlign: 'center', color: 'var(--text-muted)' }}>
-        Loading quiz analytics & submissions...
-      </div>
-    );
-  }
-
-  if (error || !analytics) {
-    return (
-      <div style={{ maxWidth: '1000px', margin: '40px auto', padding: '24px' }}>
-        <div style={{ background: '#fee2e2', color: '#b91c1c', padding: '16px', borderRadius: '8px' }}>
-          {error || 'Analytics not found.'}
-        </div>
-      </div>
-    );
-  }
-
-  const maxBucketCount = Math.max(...analytics.score_buckets.map((b) => b.count), 1);
-
+  // ── CSV export (local, no shared deps) ──────────────────────────────
   const exportSubmissionsCsv = () => {
-    if (!analytics || !analytics.submissions) return;
+    if (!analytics?.submissions?.length) return;
     const headers = ['Attempt ID', 'Student Name', 'Student Email', 'Status', 'Score', 'Max Score', 'Started At', 'Submitted At', 'Receipt'];
     const rows = analytics.submissions.map((s) => [
       s.attempt_id,
@@ -70,241 +342,290 @@ export const AnalyticsPage: React.FC = () => {
     a.href = url;
     a.download = `${analytics.title.replace(/\s+/g, '_')}_submissions.csv`;
     a.click();
+    URL.revokeObjectURL(url);
   };
 
+  // ── loading ──────────────────────────────────────────────────────────
+  if (isLoading) {
+    return (
+      <Page
+        title="Quiz analytics"
+        description="Student submissions, item psychometrics, and score distribution."
+        actions={
+          <Button variant="secondary" size="sm" disabled>
+            <ArrowLeft className="size-4" />
+            Back
+          </Button>
+        }
+      >
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Card key={i}>
+              <CardContent className="stat-card">
+                <Skeleton className="stat-icon" />
+                <div className="flex-1 space-y-2">
+                  <Skeleton className="h-4 w-2/3" />
+                  <Skeleton className="h-6 w-1/2" />
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+        <div className="mt-6 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <Card>
+            <CardContent className="p-5">
+              <Skeleton className="h-6 w-1/3 mb-4" />
+              <div className="flex items-end gap-2 h-40">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <Skeleton key={i} className="w-8 flex-1" />
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="md:col-span-2">
+            <CardContent className="p-5">
+              <Skeleton className="h-6 w-1/4 mb-4" />
+              <LoadingSkeleton rows={5} variant="list" />
+            </CardContent>
+          </Card>
+        </div>
+      </Page>
+    );
+  }
+
+  // ── error ────────────────────────────────────────────────────────────
+  if (isError) {
+    return (
+      <Page
+        title="Quiz analytics"
+        description="Student submissions, item psychometrics, and score distribution."
+      >
+        <ErrorState
+          title="Could not load quiz analytics"
+          error={error}
+          onRetry={() => refetch()}
+        />
+      </Page>
+    );
+  }
+
+  // ── empty / not found ────────────────────────────────────────────────
+  if (!analytics) {
+    return (
+      <Page
+        title="Quiz analytics"
+        description="Student submissions, item psychometrics, and score distribution."
+      >
+        <EmptyState
+          icon={ClipboardList}
+          title="Analytics not found"
+          description="No analytics are available for this quiz version."
+          action={
+            <Button variant="secondary" size="sm" onClick={() => navigate(-1)}>
+              <ArrowLeft className="size-4" />
+              Go back
+            </Button>
+          }
+        />
+      </Page>
+    );
+  }
+
+  // ── submissions table ────────────────────────────────────────────────
+  const [sorting, setSorting] = useState<SortingState>([
+    { id: 'submitted_at', desc: true },
+  ]);
+  const table = useReactTable({
+    data: analytics.submissions ?? [],
+    columns: submissionColumns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    enableMultiSort: false,
+  });
+
+  // ── question analytics table ─────────────────────────────────────────
+  const questionTable = useReactTable({
+    data: analytics.question_analytics ?? [],
+    columns: questionColumns,
+    getCoreRowModel: getCoreRowModel(),
+    enableSorting: false,
+  });
+
   return (
-    <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '24px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: '1.75rem' }}>Quiz Analytics: {analytics.title}</h1>
-          <p style={{ margin: '4px 0 0', color: 'var(--text-muted, #64748b)' }}>
-            Student submissions, item psychometrics, and score distribution.
-          </p>
-        </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <Button variant="secondary" onClick={exportSubmissionsCsv} disabled={!analytics.submissions?.length}>
-            📥 Export CSV
+    <Page
+      title={`Quiz analytics: ${analytics.title}`}
+      description="Student submissions, item psychometrics, and score distribution."
+      actions={
+        <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={exportSubmissionsCsv}
+            disabled={!analytics.submissions?.length}
+          >
+            <Download className="size-4" />
+            Export CSV
           </Button>
-          <Button variant="secondary" onClick={() => window.history.back()}>
-            ← Back
+          <Button variant="secondary" size="sm" onClick={() => navigate(-1)}>
+            <ArrowLeft className="size-4" />
+            Back
           </Button>
         </div>
+      }
+      width="wide"
+    >
+      {/* ── Summary stat cards ── */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          icon={<ClipboardList className="size-6" />}
+          label="Total attempts"
+          value={analytics.total_attempts}
+          sub={`${analytics.submitted_count} submitted · ${analytics.locked_count} locked`}
+        />
+        <StatCard
+          icon={<BarChart3 className="size-6" />}
+          label="Mean score"
+          value={`${analytics.mean_score} / ${analytics.max_score}`}
+          sub={analytics.max_score > 0 ? `${Math.round((analytics.mean_score / analytics.max_score) * 100)}% mean performance` : undefined}
+          tone="primary"
+        />
+        <StatCard
+          icon={<BarChart3 className="size-6" />}
+          label="Median score"
+          value={analytics.median_score}
+          sub="50th percentile"
+        />
+        <StatCard
+          icon={<BarChart3 className="size-6" />}
+          label="Score range"
+          value={`${analytics.lowest_score} – ${analytics.highest_score}`}
+          sub="Lowest to highest achieved"
+        />
       </div>
 
-      {/* Metric Cards Row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-        <Card style={{ padding: '16px', textAlign: 'center' }}>
-          <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Total Attempts</div>
-          <div style={{ fontSize: '1.8rem', fontWeight: 700, margin: '4px 0' }}>{analytics.total_attempts}</div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-            {analytics.submitted_count} submitted · {analytics.locked_count} locked
-          </div>
-        </Card>
+      {/* ── Score distribution ── */}
+      <Card className="mt-6">
+        <ScoreDistribution buckets={analytics.score_buckets} />
+      </Card>
 
-        <Card style={{ padding: '16px', textAlign: 'center' }}>
-          <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Average Score</div>
-          <div style={{ fontSize: '1.8rem', fontWeight: 700, margin: '4px 0', color: 'var(--primary, #2563eb)' }}>
-            {analytics.mean_score} <span style={{ fontSize: '1rem', fontWeight: 400 }}>/ {analytics.max_score}</span>
-          </div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-            {analytics.max_score > 0 ? Math.round((analytics.mean_score / analytics.max_score) * 100) : 0}% mean performance
-          </div>
-        </Card>
-
-        <Card style={{ padding: '16px', textAlign: 'center' }}>
-          <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Median Score</div>
-          <div style={{ fontSize: '1.8rem', fontWeight: 700, margin: '4px 0' }}>{analytics.median_score}</div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>50th percentile mark</div>
-        </Card>
-
-        <Card style={{ padding: '16px', textAlign: 'center' }}>
-          <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Score Range</div>
-          <div style={{ fontSize: '1.8rem', fontWeight: 700, margin: '4px 0' }}>
-            {analytics.lowest_score} - {analytics.highest_score}
-          </div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Min to Max achieved</div>
-        </Card>
-      </div>
-
-      {/* Student Submissions Table */}
-      <Card style={{ padding: '24px', marginBottom: '24px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <div>
-            <h3 style={{ margin: 0, fontSize: '1.15rem' }}>Student Submissions & Score Roster ({analytics.submissions?.length ?? 0})</h3>
-            <p style={{ margin: '4px 0 0', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-              Individual student attempts, scores, submission timestamps, and receipts.
-            </p>
-          </div>
-        </div>
-
-        {!analytics.submissions || analytics.submissions.length === 0 ? (
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', margin: 0 }}>No student attempts recorded for this quiz version yet.</p>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
-              <thead>
-                <tr style={{ borderBottom: '2px solid var(--border, #cbd5e1)', color: 'var(--text-muted)' }}>
-                  <th style={{ padding: '10px 8px' }}>Student</th>
-                  <th style={{ padding: '10px 8px' }}>Status</th>
-                  <th style={{ padding: '10px 8px' }}>Score</th>
-                  <th style={{ padding: '10px 8px' }}>Submitted</th>
-                  <th style={{ padding: '10px 8px' }}>Receipt #</th>
-                  <th style={{ padding: '10px 8px', textAlign: 'right' }}>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {analytics.submissions.map((sub) => {
-                  const sl = statusLabel(sub.status);
-                  return (
-                    <tr key={sub.attempt_id} style={{ borderBottom: '1px solid var(--border, #e2e8f0)' }}>
-                      <td style={{ padding: '12px 8px' }}>
-                        <div style={{ fontWeight: 600 }}>{sub.user_name}</div>
-                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{sub.user_email}</div>
-                      </td>
-                      <td style={{ padding: '12px 8px' }}>
-                        <Pill tone={sl.tone} symbol={sl.symbol}>
-                          {sl.label}
-                        </Pill>
-                      </td>
-                      <td style={{ padding: '12px 8px' }}>
-                        {sub.score !== null ? (
-                          <strong>{sub.score} / {sub.max_score}</strong>
-                        ) : (
-                          <span style={{ color: 'var(--text-muted)' }}>—</span>
-                        )}
-                      </td>
-                      <td style={{ padding: '12px 8px', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                        {formatDateTime(sub.submitted_at || sub.started_at)}
-                      </td>
-                      <td style={{ padding: '12px 8px', fontSize: '0.85rem' }}>
-                        {sub.receipt ? <code>{sub.receipt}</code> : <span style={{ color: 'var(--text-muted)' }}>—</span>}
-                      </td>
-                      <td style={{ padding: '12px 8px', textAlign: 'right' }}>
-                        {sub.status === 'locked' || sub.status === 'under_review' ? (
-                          <Link className="btn small secondary" to={`/incidents/attempt/${sub.attempt_id}`}>
-                            Review Incident
-                          </Link>
-                        ) : (
-                          <Link className="btn small secondary" to={`/results/attempt/${sub.attempt_id}`}>
-                            View Result
-                          </Link>
-                        )}
+      {/* ── Per-question analytics ── */}
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle>Question item analysis</CardTitle>
+          <CardDescription>
+            Per-question accuracy and discrimination index. Low-discrimination items are flagged.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {analytics.question_analytics?.length === 0 ? (
+            <EmptyState
+              icon={ClipboardList}
+              title="No question data"
+              description="Question analytics will appear once students have attempted this quiz."
+            />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="tbl">
+                <thead>
+                  {questionTable.getHeaderGroups().map((hg) => (
+                    <tr key={hg.id}>
+                      {hg.headers.map((h) => (
+                        <th key={h.id} style={{ width: h.getSize() }}>
+                          {h.isPlaceholder ? null : flexRender(h.column.columnDef.header, h.getContext())}
+                        </th>
+                      ))}
+                    </tr>
+                  ))}
+                </thead>
+                <tbody>
+                  {questionTable.getRowModel().rows?.length ? (
+                    questionTable.getRowModel().rows.map((row) => (
+                      <tr key={row.id}>
+                        {row.getVisibleCells().map((cell) => (
+                          <td key={cell.id}>
+                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                          </td>
+                        ))}
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={questionColumns.length} className="text-center text-muted-foreground">
+                        No question analytics available.
                       </td>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
       </Card>
 
-      {/* Score Distribution Chart */}
-      <Card style={{ padding: '24px', marginBottom: '24px' }}>
-        <h3 style={{ margin: '0 0 16px', fontSize: '1.15rem' }}>Score Distribution</h3>
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: '20px', height: '180px', padding: '10px 0', borderBottom: '2px solid var(--border, #cbd5e1)' }}>
-          {analytics.score_buckets.map((bucket, idx) => {
-            const heightPct = Math.round((bucket.count / maxBucketCount) * 100);
-            return (
-              <div key={idx} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end' }}>
-                <span style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px' }}>{bucket.count}</span>
-                <div
-                  style={{
-                    width: '100%',
-                    maxWidth: '60px',
-                    height: `${Math.max(heightPct, 6)}%`,
-                    backgroundColor: bucket.count > 0 ? 'var(--primary, #3b82f6)' : '#e2e8f0',
-                    borderRadius: '6px 6px 0 0',
-                    transition: 'height 0.3s ease',
-                  }}
-                />
-                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '8px' }}>{bucket.range}</span>
-              </div>
-            );
-          })}
-        </div>
+      {/* ── Submissions table ── */}
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle>Student submissions</CardTitle>
+          <CardDescription>
+            {analytics.submissions?.length ?? 0} submission{analytics.submissions?.length !== 1 ? 's' : ''} recorded.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {analytics.submissions?.length === 0 ? (
+            <EmptyState
+              icon={ClipboardList}
+              title="No submissions yet"
+              description="No student attempts have been recorded for this quiz version."
+            />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="tbl">
+                <thead>
+                  {table.getHeaderGroups().map((hg) => (
+                    <tr key={hg.id}>
+                      {hg.headers.map((h) => (
+                        <th key={h.id}>
+                          {h.isPlaceholder ? null : (
+                            <button
+                              className="flex items-center gap-1 font-medium text-muted-foreground hover:text-foreground"
+                              onClick={h.column.getToggleSortingHandler()}
+                              aria-label={`Sort by ${h.column.id}`}
+                            >
+                              {flexRender(h.column.columnDef.header, h.getContext())}
+                              <ChevronsUpDown className="size-3" aria-hidden="true" />
+                            </button>
+                          )}
+                        </th>
+                      ))}
+                    </tr>
+                  ))}
+                </thead>
+                <tbody>
+                  {table.getRowModel().rows?.length ? (
+                    table.getRowModel().rows.map((row) => (
+                      <tr key={row.id}>
+                        {row.getVisibleCells().map((cell) => (
+                          <td key={cell.id}>
+                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                          </td>
+                        ))}
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={submissionColumns.length} className="text-center text-muted-foreground">
+                        No submissions.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
       </Card>
-
-      {/* Question Item Analysis Table */}
-      <Card style={{ padding: '24px' }}>
-        <h3 style={{ margin: '0 0 16px', fontSize: '1.15rem' }}>Question Item Analysis & Psychometrics</h3>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
-            <thead>
-              <tr style={{ borderBottom: '2px solid var(--border, #cbd5e1)', color: 'var(--text-muted)' }}>
-                <th style={{ padding: '10px 8px', width: '50px' }}>#</th>
-                <th style={{ padding: '10px 8px' }}>Question Text</th>
-                <th style={{ padding: '10px 8px', width: '90px' }}>Type</th>
-                <th style={{ padding: '10px 8px', width: '70px' }}>Points</th>
-                <th style={{ padding: '10px 8px', width: '90px' }}>Responses</th>
-                <th style={{ padding: '10px 8px', width: '120px' }}>Accuracy Rate</th>
-                <th style={{ padding: '10px 8px', width: '140px' }}>Discrimination (D)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {analytics.question_analytics.map((qa, idx) => {
-                const accPct = Math.round(qa.accuracy_rate * 100);
-                let accColor = '#16a34a'; // High
-                if (accPct < 40) accColor = '#dc2626'; // Hard
-                else if (accPct < 70) accColor = '#ca8a04'; // Moderate
-
-                let dRating = 'Poor';
-                let dBadgeVariant: 'primary' | 'secondary' | 'danger' = 'secondary';
-                if (qa.discrimination_index >= 0.4) {
-                  dRating = 'Excellent';
-                  dBadgeVariant = 'primary';
-                } else if (qa.discrimination_index >= 0.2) {
-                  dRating = 'Good';
-                }
-
-                return (
-                  <tr key={qa.question_id} style={{ borderBottom: '1px solid var(--border, #e2e8f0)' }}>
-                    <td style={{ padding: '12px 8px', fontWeight: 600 }}>{idx + 1}</td>
-                    <td style={{ padding: '12px 8px' }}>
-                      <RichText content={qa.text} />
-                    </td>
-                    <td style={{ padding: '12px 8px' }}>
-                      <Badge variant="secondary">{qa.qtype.toUpperCase()}</Badge>
-                    </td>
-                    <td style={{ padding: '12px 8px' }}>{qa.points}</td>
-                    <td style={{ padding: '12px 8px' }}>
-                      {qa.correct_answers} / {qa.total_answers}
-                    </td>
-                    <td style={{ padding: '12px 8px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <div
-                          style={{
-                            width: '40px',
-                            height: '6px',
-                            background: '#e2e8f0',
-                            borderRadius: '3px',
-                            overflow: 'hidden',
-                          }}
-                        >
-                          <div
-                            style={{
-                              width: `${accPct}%`,
-                              height: '100%',
-                              backgroundColor: accColor,
-                            }}
-                          />
-                        </div>
-                        <span style={{ fontWeight: 600, color: accColor }}>{accPct}%</span>
-                      </div>
-                    </td>
-                    <td style={{ padding: '12px 8px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span style={{ fontWeight: 600 }}>{qa.discrimination_index}</span>
-                        <Badge variant={dBadgeVariant}>{dRating}</Badge>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-    </div>
+    </Page>
   );
 };

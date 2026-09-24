@@ -1,9 +1,24 @@
-import { useEffect, useState, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
+import { ArrowLeft, Check, X, Minus, KeyRound, AlertCircle, HelpCircle } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { qk } from '../lib/queries';
 import { api, ApiError } from '../api';
-import type { ResultDetail } from '../types';
-import { Pill, formatDateTime } from '../components/ui';
+import type { ResultDetail, ResultDetail as ResultDetailType } from '../types';
+import { formatDateTime } from '../components/ui';
 import { RichText } from '../components/RichText';
+import { Page, EmptyState, ErrorState, LoadingSkeleton } from '../components/primitives';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Progress } from '@/components/ui/progress';
+
+/**
+ * Response wrapper shape — confirmed against the live endpoint: the API returns
+ * `{ result: ResultDetail }`, NOT a bare ResultDetail. Type the generic to match.
+ */
+interface ResultDetailResponse {
+  result: ResultDetail;
+}
 
 function prettyAnswer(_qtype: string, v: unknown): string {
   if (v == null) return '—';
@@ -12,108 +27,294 @@ function prettyAnswer(_qtype: string, v: unknown): string {
   return String(v);
 }
 
+/** Derive a pass/fail/neutral status per question using icon + text (WCAG AA). */
+function questionStatus(q: ResultDetailType['per_question'][number]): {
+  label: string;
+  icon: React.ElementType;
+  tone: 'success' | 'warning' | 'destructive' | 'secondary';
+} {
+  if (q.earned > 0) {
+    return { label: 'Correct', icon: Check, tone: 'success' };
+  }
+  if (q.answered) {
+    return { label: 'Incorrect', icon: X, tone: 'destructive' };
+  }
+  return { label: 'Not answered', icon: Minus, tone: 'secondary' };
+}
+
+function DetailSkeleton() {
+  return (
+    <div className="space-y-6" aria-hidden="true">
+      <LoadingSkeleton variant="text" rows={2} />
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <LoadingSkeleton variant="cards" rows={3} />
+      </div>
+      <div className="space-y-4">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Card key={i}>
+            <CardHeader>
+              <LoadingSkeleton variant="text" rows={1} />
+            </CardHeader>
+            <CardContent>
+              <LoadingSkeleton variant="text" rows={3} />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function ResultDetailPage() {
-  const { attemptId } = useParams();
-  const [result, setResult] = useState<ResultDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { attemptId } = useParams<{ attemptId: string }>();
+  const attemptIdNum = attemptId ? Number(attemptId) : NaN;
 
-  const load = useCallback(async () => {
-    try {
-      const res = await api.get<{ result: ResultDetail }>(`/results/attempt/${attemptId}`);
-      setResult(res.result);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not load this result.');
-    }
-  }, [attemptId]);
+  const {
+    data: response,
+    error,
+    isError,
+    isPending,
+    refetch,
+  } = useQuery({
+    queryKey: qk.resultDetail(attemptIdNum),
+    queryFn: () => api.get<ResultDetailResponse>(`/results/attempt/${attemptIdNum}`),
+    enabled: Number.isFinite(attemptIdNum),
+    staleTime: 30_000,
+  });
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const result = response?.result ?? null;
 
-  if (error) return <div className="banner error">{error}</div>;
-  if (!result) return <p className="muted">Loading result…</p>;
+  // ---- States: loading / error / empty ----
+  if (isPending) {
+    return (
+      <Page title="Result" description="Loading your result…">
+        <DetailSkeleton />
+      </Page>
+    );
+  }
+
+  if (isError) {
+    return (
+      <Page title="Result" description="Could not load this result.">
+        <ErrorState
+          title="Could not load this result"
+          error={error instanceof ApiError ? error.message : error}
+          onRetry={() => void refetch()}
+        />
+      </Page>
+    );
+  }
+
+  if (!result) {
+    return (
+      <Page title="Result" description="No result found.">
+        <EmptyState
+          icon={AlertCircle}
+          title="No result found"
+          description="This attempt does not have a released result."
+          action={
+            <Button asChild variant="secondary" size="sm">
+              <Link to="/results">
+                <ArrowLeft />
+                All results
+              </Link>
+            </Button>
+          }
+        />
+      </Page>
+    );
+  }
 
   const answered = result.per_question.filter((q) => q.answered).length;
+  const scorePct = result.max_score ? Math.round((result.score / result.max_score) * 100) : 0;
+  const isPassed = scorePct >= 60;
+  const keyReleased = result.answer_key_released === 1;
+  const resultReleased = result.released === 1;
 
   return (
-    <div>
-      <div className="card-row">
-        <div className="grow">
-          <h1>{result.quiz_title}</h1>
-          <p className="muted small">
-            {result.course_code} · {result.course_name} · v{result.version} · submitted{' '}
-            {formatDateTime(result.submitted_at)}
-          </p>
-        </div>
-        <Pill tone={result.score >= result.max_score * 0.6 ? 'ok' : 'warn'} symbol="✓">
-          {result.score}/{result.max_score}
-        </Pill>
-      </div>
-
-      <div className="grid-3" style={{ margin: '1rem 0' }}>
-        <div className="card">
-          <h3>Score</h3>
-          <strong>{result.score}</strong> / {result.max_score}
-        </div>
-        <div className="card">
-          <h3>Answered</h3>
-          {answered}/{result.per_question.length} questions
-        </div>
-        <div className="card">
-          <h3>Answer key</h3>
-          {result.answer_key_released ? 'Released with result' : 'Not released'}
-        </div>
-      </div>
-
-      {result.answer_key_released === 0 && (
-        <div className="banner info">
-          The instructor has not released the answer key for this quiz. You can see your own answers and how many points
-          you earned per question.
-        </div>
-      )}
-
-      <h2>Question breakdown</h2>
-      {result.per_question.map((q, i) => (
-        <div className="card" key={q.question_id}>
-          <div className="card-row">
-            <div className="grow">
-              <strong>Q{i + 1}</strong> · <Pill tone="neutral" symbol="·">{q.qtype}</Pill> · {q.points} pt
-              <div style={{ margin: '0.4rem 0', fontWeight: 600 }}>
-                <RichText content={q.text} />
+    <Page
+      title={result.quiz_title}
+      description={
+        <span className="text-sm text-muted-foreground">
+          {result.course_code} · {result.course_name} · v{result.version} · submitted{' '}
+          {formatDateTime(result.submitted_at)}
+        </span>
+      }
+      actions={
+        <Badge variant={isPassed ? 'success' : 'warning'} className="text-sm font-medium">
+          {result.score}/{result.max_score} · {scorePct}%
+        </Badge>
+      }
+      width="wide"
+    >
+      <div className="space-y-8">
+        {/* Score ring / progress */}
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex flex-col items-center gap-4 sm:flex-row sm:justify-between">
+              <div className="text-center sm:text-left">
+                <p className="text-sm font-medium text-muted-foreground">Your score</p>
+                <p className="font-display text-3xl font-bold text-foreground">
+                  {result.score} / {result.max_score}
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {scorePct}% · {isPassed ? 'Passed' : 'Not passed'}
+                </p>
+              </div>
+              <div className="w-full max-w-xs">
+                <Progress
+                  value={scorePct}
+                  className="h-3"
+                  aria-label={`Score ${scorePct}%`}
+                  indicatorClassName={isPassed ? 'bg-[var(--success)]' : 'bg-[var(--warning)]'}
+                />
               </div>
             </div>
-            <Pill tone={q.earned > 0 ? 'ok' : q.answered ? 'danger' : 'neutral'} symbol={q.earned > 0 ? '✓' : q.answered ? '✗' : '·'}>
-              {q.earned} / {q.points} pt
-            </Pill>
-          </div>
-          <div className="grid-3" style={{ marginTop: '0.6rem' }}>
-            <div>
-              <div className="muted small">Your answer</div>
-              <div>{prettyAnswer(q.qtype, q.your_answer)}</div>
-            </div>
-            {result.answer_key_released && q.correct_answer != null && (
+          </CardContent>
+        </Card>
+
+        {/* Stat summary */}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <Card>
+            <CardContent className="stat-card">
               <div>
-                <div className="muted small">Correct answer</div>
-                <div>{prettyAnswer(q.qtype, q.correct_answer)}</div>
-              </div>
-            )}
-          </div>
-          {q.options.length > 0 && (
-            <div className="muted small" style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              {q.options.map((o, optIdx) => (
-                <div key={optIdx} style={{ display: 'flex', gap: '6px' }}>
-                  <span>{String.fromCharCode(65 + optIdx)}.</span>
-                  <RichText content={o} />
+                <div className="stat-value">
+                  {answered}
+                  <span className="text-muted-foreground"> / {result.per_question.length}</span>
                 </div>
-              ))}
-            </div>
-          )}
+                <div className="text-sm text-muted-foreground">Questions answered</div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="stat-card">
+              <KeyRound className="stat-icon" aria-hidden="true" />
+              <div>
+                <div className="stat-value">{keyReleased ? 'Released' : 'Withheld'}</div>
+                <div className="text-sm text-muted-foreground">Answer key</div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="stat-card">
+              <AlertCircle className="stat-icon" aria-hidden="true" />
+              <div>
+                <div className="stat-value">{resultReleased ? 'Released' : 'Withheld'}</div>
+                <div className="text-sm text-muted-foreground">Result</div>
+              </div>
+            </CardContent>
+          </Card>
         </div>
-      ))}
 
-      <p style={{ marginTop: '1rem' }}>
-        <Link className="btn secondary" to="/results">← All results</Link>
-      </p>
-    </div>
+        {/* Answer key not released banner */}
+        {!keyReleased && (
+          <div
+            className="flex items-start gap-3 rounded-[var(--radius-md)] border border-[var(--primary)]/30 bg-[var(--primary)]/5 px-4 py-3 text-sm"
+            role="status"
+            aria-live="polite"
+          >
+            <HelpCircle className="mt-0.5 size-5 text-[var(--primary)]" aria-hidden="true" />
+            <p>
+              The instructor has not released the answer key for this quiz. You can see your own
+              answers and the points earned per question, but correct answers are hidden until
+              release.
+            </p>
+          </div>
+        )}
+
+        {/* Per-question breakdown */}
+        <div className="space-y-4">
+          <h2 className="font-display text-xl font-semibold text-foreground">Question breakdown</h2>
+          {result.per_question.map((q, i) => {
+            const status = questionStatus(q);
+            const Icon = status.icon;
+            return (
+              <Card key={q.question_id}>
+                <CardHeader>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <span className="font-display text-xl font-bold text-[var(--primary)]">
+                        Q{i + 1}
+                      </span>
+                      <Badge variant="secondary">{q.qtype}</Badge>
+                      <span className="text-sm text-muted-foreground">{q.points} pt</span>
+                    </div>
+                    <Badge
+                      variant={
+                        status.tone === 'success'
+                          ? 'success'
+                          : status.tone === 'destructive'
+                            ? 'destructive'
+                            : status.tone === 'warning'
+                              ? 'warning'
+                              : 'secondary'
+                      }
+                      className="flex items-center gap-1.5"
+                    >
+                      <Icon aria-hidden="true" />
+                      <span>{q.earned} / {q.points} pt</span>
+                      <span className="sr-only">{status.label}</span>
+                    </Badge>
+                  </div>
+                  <CardTitle className="mt-2">
+                    <RichText content={q.text} />
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                        Your answer
+                      </p>
+                      <p className="mt-1 font-mono text-sm break-words">
+                        {prettyAnswer(q.qtype, q.your_answer)}
+                      </p>
+                    </div>
+                    {keyReleased && q.correct_answer != null && (
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                          Correct answer
+                        </p>
+                        <p className="mt-1 font-mono text-sm break-words">
+                          {prettyAnswer(q.qtype, q.correct_answer)}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                  {q.options.length > 0 && (
+                    <ol className="flex flex-col gap-1.5">
+                      {q.options.map((o, optIdx) => (
+                        <li
+                          key={optIdx}
+                          className="flex items-baseline gap-3 text-sm text-muted-foreground"
+                        >
+                          <span
+                            className="font-mono font-semibold text-foreground"
+                            aria-hidden="true"
+                          >
+                            {String.fromCharCode(65 + optIdx)}
+                          </span>
+                          <RichText content={o} />
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+
+        {/* Back action */}
+        <div>
+          <Button asChild variant="secondary">
+            <Link to="/results">
+              <ArrowLeft />
+              All results
+            </Link>
+          </Button>
+        </div>
+      </div>
+    </Page>
   );
 }

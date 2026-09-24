@@ -1,250 +1,618 @@
-import { useEffect, useState, useCallback } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useState, useMemo } from 'react';
+import { Link, useParams, useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
+import {
+  ColumnDef,
+  flexRender,
+  getCoreRowModel,
+  useReactTable,
+} from '@tanstack/react-table';
+import {
+  BookOpen,
+  Clock,
+  Edit,
+  Eye,
+  LayoutDashboard,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Users,
+} from 'lucide-react';
 import { api, ApiError } from '../api';
 import { useAuth } from '../auth';
-import type { CourseQuizzesResponse, RosterResponse } from '../types';
-import { Pill, formatDateTime } from '../components/ui';
+import type { RosterMember, QuizList } from '../types';
+import { useCourse, useCourseQuizzes, qk } from '../lib/queries';
+import { toast } from '../components/ui/sonner';
+import { Page, EmptyState, ErrorState, LoadingSkeleton } from '../components/primitives';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import {
+  AlertDialog,
+  AlertDialogTrigger,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from '../components/ui/alert-dialog';
 import { AccommodationsModal } from '../components/AccommodationsModal';
+
+/**
+ * CoursePage — course home: header + role badge, quiz list (cards), and roster
+ * (staff/admin only). Students see only the quiz list.
+ *
+ * Route contract (unchanged): /courses/:courseId
+ *
+ * Data layer: `useCourse` + `useCourseQuizzes` (react-query). Mutations
+ * (create quiz, add/remove member, release results) invalidate the matching
+ * query keys via the shared queryClient.
+ */
+
+const MEMBER_ROLE_OPTIONS = [
+  { value: 'student', label: 'Student' },
+  { value: 'ta', label: 'TA' },
+  { value: 'instructor', label: 'Instructor' },
+] as const;
+
+const addMemberSchema = z.object({
+  email: z.string().email('Enter a valid email address.'),
+  memberRole: z.enum(['student', 'ta', 'instructor']),
+});
+type AddMemberForm = z.infer<typeof addMemberSchema>;
+
+/** Map a role string to a badge variant + icon. Colour is a secondary cue. */
+function roleBadge(role: string): { variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline'; icon: React.ReactNode; label: string } {
+  switch (role) {
+    case 'instructor':
+      return { variant: 'default', icon: <Users className="size-3" aria-hidden="true" />, label: 'Instructor' };
+    case 'ta':
+      return { variant: 'secondary', icon: <Users className="size-3" aria-hidden="true" />, label: 'TA' };
+    case 'admin':
+      return { variant: 'success', icon: <Users className="size-3" aria-hidden="true" />, label: 'Admin' };
+    default:
+      return { variant: 'outline', icon: <Users className="size-3" aria-hidden="true" />, label: role };
+  }
+}
+
+/** Status → badge variant + icon for quiz version state. */
+function versionBadge(v: { status: string } | null): { variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline'; icon: React.ReactNode; label: string } | null {
+  if (!v) return null;
+  switch (v.status) {
+    case 'published':
+      return { variant: 'success', icon: <Clock className="size-3" aria-hidden="true" />, label: 'Published' };
+    case 'draft':
+      return { variant: 'warning', icon: <Edit className="size-3" aria-hidden="true" />, label: 'Draft' };
+    case 'archived':
+      return { variant: 'secondary', icon: <Clock className="size-3" aria-hidden="true" />, label: 'Archived' };
+    default:
+      return { variant: 'outline', icon: <Clock className="size-3" aria-hidden="true" />, label: v.status };
+  }
+}
 
 export function CoursePage() {
   const { courseId } = useParams();
+  const navigate = useNavigate();
   const { user } = useAuth();
-  const [data, setData] = useState<{ course: { id: number; code: string; name: string }; role: string; roster?: RosterResponse['roster'] } | null>(null);
-  const [quizzes, setQuizzes] = useState<CourseQuizzesResponse['quizzes']>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
+  const qc = useQueryClient();
+
+  const cid = courseId ? Number(courseId) : NaN;
+  const { data: courseData, error: courseError, isError: courseIsError, refetch: refetchCourse } = useCourse(cid);
+  const { data: quizzesData, error: quizzesError, isError: quizzesIsError, refetch: refetchQuizzes } = useCourseQuizzes(cid);
+
   const [showAccommodations, setShowAccommodations] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<RosterMember | null>(null);
 
-  const isStaff = !!data && data.role !== 'student';
+  const isStaff = !!user && user.role !== 'student';
 
-  const load = useCallback(async () => {
-    const cid = Number(courseId);
+  const error = courseError ?? quizzesError;
+  const isError = courseIsError || quizzesIsError;
+
+  const handleRetry = () => {
+    void refetchCourse();
+    void refetchQuizzes();
+  };
+
+  const handleCreateQuiz = async () => {
     try {
-      const [course, qz] = await Promise.all([
-        api.get<{ course: { id: number; code: string; name: string }; role: string; roster?: RosterResponse['roster'] }>(`/courses/${cid}`),
-        api.get<CourseQuizzesResponse>(`/quizzes/course/${cid}`),
-      ]);
-      setData(course);
-      setQuizzes(qz.quizzes);
+      const res = await api.post<{ quiz_id: number }>(`/quizzes/course/${cid}`);
+      navigate(`/quizzes/${res.quiz_id}`);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to load course.');
-    }
-  }, [courseId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const createQuiz = async () => {
-    try {
-      const res = await api.post<{ quiz_id: number }>(`/quizzes/course/${courseId}`);
-      window.location.href = `/quizzes/${res.quiz_id}`;
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Creation failed.');
+      toast.error(err instanceof ApiError ? err.message : 'Creation failed.');
     }
   };
 
-  const release = async (versionId: number) => {
+  const handleRelease = async (versionId: number) => {
     try {
       const r = await api.post<{ released: number }>(`/results/quiz/${versionId}/release`);
-      setMsg(`Released ${r.released} result(s).`);
-      void load();
+      toast.success(`Released ${r.released} result(s).`);
+      void qc.invalidateQueries({ queryKey: qk.courseQuizzes(cid) });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Release failed.');
+      toast.error(err instanceof ApiError ? err.message : 'Release failed.');
     }
   };
 
-  const addMember = async (email: string, role: string) => {
+  const handleAddMember = async (data: AddMemberForm) => {
     try {
-      await api.put(`/courses/${courseId}/members`, { email, memberRole: role });
-      setMsg(`Added ${email} as ${role}.`);
-      void load();
+      await api.put(`/courses/${cid}/members`, { email: data.email, memberRole: data.memberRole });
+      toast.success(`Added ${data.email} as ${data.memberRole}.`);
+      void qc.invalidateQueries({ queryKey: qk.course(cid) });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Adding member failed.');
+      toast.error(err instanceof ApiError ? err.message : 'Adding member failed.');
     }
   };
 
-  const removeMember = async (userId: number) => {
+  const handleRemoveMember = async () => {
+    if (!removeTarget) return;
     try {
-      await api.del(`/courses/${courseId}/members/${userId}`);
-      void load();
+      await api.del(`/courses/${cid}/members/${removeTarget.id}`);
+      toast.success(`Removed ${removeTarget.email}.`);
+      void qc.invalidateQueries({ queryKey: qk.course(cid) });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not remove member.');
+      toast.error(err instanceof ApiError ? err.message : 'Could not remove member.');
+    } finally {
+      setRemoveTarget(null);
     }
   };
 
-  if (error) return <div className="banner error">{error}</div>;
-  if (!data) return <p className="muted">Loading course…</p>;
+  if (!cid || Number.isNaN(cid)) {
+    return (
+      <Page title="Course" description="Invalid course id." width="wide">
+        <ErrorState error="Invalid course id." onRetry={() => navigate('/')} />
+      </Page>
+    );
+  }
+
+  if (isError) {
+    return (
+      <Page title="Course" description="Could not load this course." width="wide">
+        <ErrorState error={error} onRetry={handleRetry} />
+      </Page>
+    );
+  }
+
+  if (!courseData || !quizzesData) {
+    return (
+      <Page
+        title="Loading course…"
+        description="Fetching course details and quizzes."
+        width="wide"
+      >
+        <LoadingSkeleton variant="cards" rows={3} />
+      </Page>
+    );
+  }
+
+  const { course, role, roster } = courseData;
+  const quizzes: QuizList[] = quizzesData.quizzes;
+
+  const roleInfo = roleBadge(role);
+  const actions = isStaff ? (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button asChild variant="secondary" size="sm">
+        <Link to={`/courses/${cid}/banks`}>
+          <BookOpen className="size-4" aria-hidden="true" />
+          Question Banks
+        </Link>
+      </Button>
+      <Button variant="secondary" size="sm" onClick={() => setShowAccommodations(true)}>
+        <Clock className="size-4" aria-hidden="true" />
+        Accommodations
+      </Button>
+      <Button variant="default" size="sm" onClick={() => void handleCreateQuiz()}>
+        <Plus className="size-4" aria-hidden="true" />
+        New quiz
+      </Button>
+    </div>
+  ) : null;
 
   return (
-    <div>
-      <div className="card-row">
-        <div className="grow">
-          <h1>{data.course.code} · {data.course.name}</h1>
-          <span className="muted small">Your role: <strong>{data.role}</strong></span>
-        </div>
-        {isStaff && (
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <Link className="btn secondary" to={`/courses/${courseId}/banks`}>
-              📚 Question Banks
-            </Link>
-            <button className="btn secondary" onClick={() => setShowAccommodations(true)}>
-              ⏱ Accommodations
-            </button>
-            <button className="btn" onClick={() => void createQuiz()}>
-              + New quiz
-            </button>
+    <Page
+      title={`${course.code} · ${course.name}`}
+      description={
+        <span className="inline-flex items-center gap-1.5">
+          Your role:
+          <Badge variant={roleInfo.variant} className="inline-flex items-center gap-1">
+            {roleInfo.icon}
+            {roleInfo.label}
+          </Badge>
+        </span>
+      }
+      actions={actions}
+      width="wide"
+    >
+      {/* Quizzes */}
+      <section className="mt-6">
+        <h2 className="font-display text-lg font-semibold tracking-tight text-foreground mb-3">Quizzes</h2>
+        {quizzes.length === 0 ? (
+          <EmptyState
+            icon={BookOpen}
+            title="No quizzes yet"
+            description={isStaff ? 'Create a quiz to get started.' : 'No quizzes have been published for this course.'}
+            action={isStaff ? (
+              <Button variant="default" size="sm" onClick={() => void handleCreateQuiz()}>
+                <Plus className="size-4" aria-hidden="true" />
+                New quiz
+              </Button>
+            ) : undefined}
+          />
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {quizzes.map((q) => (
+              <QuizCard
+                key={q.quiz_id}
+                quiz={q}
+                role={role}
+                isStaff={isStaff}
+                onRelease={handleRelease}
+              />
+            ))}
           </div>
         )}
-      </div>
-      {msg && <div className="banner ok">{msg}</div>}
-
-      <section style={{ marginTop: '1.25rem' }}>
-        <h2>Quizzes</h2>
-        {quizzes.length === 0 && <div className="card empty">No quizzes yet.</div>}
-        {quizzes.map((q) => {
-          const pub = q.published;
-          const draft = q.draft;
-          const st = pub?.my_attempts;
-          return (
-            <div className="card" key={q.quiz_id}>
-              <div className="card-row">
-                <div className="grow">
-                  <strong>{pub?.title ?? draft?.title}</strong>
-                  {pub && <Pill tone="ok" symbol="✓">Published v{pub.version}</Pill>}
-                  {draft && !pub && <Pill tone="warn" symbol="✎">Draft</Pill>}
-                  <div className="muted small">
-                    {pub
-                      ? `${pub.questions.length} questions · ${pub.duration_minutes ? pub.duration_minutes + ' min' : 'no timer'} · policy ${pub.integrity_policy} · ${pub.show_scores} scores`
-                      : `${draft?.questions.length ?? 0} questions in draft`}
-                  </div>
-                  {pub?.published_at && <div className="muted small">Published {formatDateTime(pub.published_at)}</div>}
-                  {pub?.attempts && pub.attempts.total > 0 && (
-                    <div className="muted small">
-                      {pub.attempts.total} attempt(s): {Object.entries(pub.attempts.statuses).map(([k, v]) => `${k} ${v}`).join(', ')} · avg {(pub.attempts.avg_score ?? 0).toFixed(1)}
-                    </div>
-                  )}
-                  {st && st.count > 0 && (
-                    <div className="muted small">
-                      Your attempts: {st.count} · best {st.best_score ?? '—'}
-                      {st.last_status === 'submitted' && st.last_receipt ? ` · receipt ${st.last_receipt}` : ''}
-                    </div>
-                  )}
-                </div>
-                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                  {pub && (
-                    <Link className="btn small secondary" to={`/quizzes/${q.quiz_id}/preflight`}>
-                      {st?.in_progress ? 'Continue attempt' : user?.role === 'student' ? 'Take quiz' : 'View published'}
-                    </Link>
-                  )}
-                  {isStaff && draft && <Link className="btn small secondary" to={`/quizzes/${q.quiz_id}`}>Edit draft</Link>}
-                  {isStaff && pub && (
-                    <>
-                      <Link className="btn small secondary" to={`/analytics/version/${pub.id}`}>
-                        📊 Analytics
-                      </Link>
-                      <button className="btn small secondary" onClick={() => void release(pub.id)}>Release results</button>
-                      <Link className="btn small secondary" to={`/quizzes/${q.quiz_id}`}>View</Link>
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
       </section>
 
+      {/* Roster — staff/admin only */}
+      {isStaff && (
+        <section className="mt-8">
+          <h2 className="font-display text-lg font-semibold tracking-tight text-foreground mb-3">Roster</h2>
+          <RosterTable
+            roster={roster ?? []}
+            onRemove={(m) => setRemoveTarget(m)}
+          />
+          <AddMemberForm courseId={cid} onSubmit={handleAddMember} />
+        </section>
+      )}
+
+      {/* Accommodations modal (shared component, rendered as-is) */}
       {showAccommodations && (
         <AccommodationsModal
-          courseId={Number(courseId)}
+          courseId={cid}
           isOpen={showAccommodations}
           onClose={() => setShowAccommodations(false)}
         />
       )}
 
-      {isStaff && (
-        <RosterCard courseId={Number(courseId)} roster={data.roster ?? []} onAdd={addMember} onRemove={removeMember} />
-      )}
+      {/* Remove member confirmation */}
+      <AlertDialog open={!!removeTarget} onOpenChange={(open) => !open && setRemoveTarget(null)}>
+        <AlertDialogTrigger asChild>
+          <span className="hidden" />
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove {removeTarget?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {removeTarget?.email} will lose access to this course. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:brightness-105"
+              onClick={() => void handleRemoveMember()}
+            >
+              Remove member
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </Page>
+  );
+}
+
+/**
+ * Quiz card — shows published/draft status badges and role-appropriate links:
+ * editor, preflight, analytics, release results.
+ */
+function QuizCard({
+  quiz,
+  role,
+  isStaff,
+  onRelease,
+}: {
+  quiz: QuizList;
+  role: string;
+  isStaff: boolean;
+  onRelease: (versionId: number) => void;
+}) {
+  const pub = quiz.published;
+  const draft = quiz.draft;
+  const title = pub?.title ?? draft?.title ?? 'Untitled quiz';
+  const pubBadge = versionBadge(pub);
+  const draftBadge = versionBadge(draft);
+
+  const attempt = pub?.my_attempts;
+  const hasAttempts = pub?.attempts && pub.attempts.total > 0;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription className="flex flex-wrap items-center gap-1.5">
+          {pubBadge && (
+            <Badge variant={pubBadge.variant} className="inline-flex items-center gap-1">
+              {pubBadge.icon}
+              {pubBadge.label} v{pub!.version}
+            </Badge>
+          )}
+          {draftBadge && !pub && (
+            <Badge variant={draftBadge.variant} className="inline-flex items-center gap-1">
+              {draftBadge.icon}
+              {draftBadge.label}
+            </Badge>
+          )}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          {pub
+            ? `${pub.questions.length} questions · ${pub.duration_minutes ? `${pub.duration_minutes} min` : 'no timer'} · policy ${pub.integrity_policy} · ${pub.show_scores} scores`
+            : `${draft?.questions.length ?? 0} questions in draft`}
+        </p>
+        {pub?.published_at && (
+          <p className="text-xs text-muted-foreground">
+            Published {new Date(pub.published_at).toLocaleString()}
+          </p>
+        )}
+        {hasAttempts && (
+          <p className="text-xs text-muted-foreground">
+            {pub!.attempts!.total} attempt(s):{' '}
+            {Object.entries(pub!.attempts!.statuses)
+              .map(([k, v]) => `${k} ${v}`)
+              .join(', ')}{' '}
+            · avg {(pub!.attempts!.avg_score ?? 0).toFixed(1)}
+          </p>
+        )}
+        {attempt && attempt.count > 0 && (
+          <p className="text-xs text-muted-foreground">
+            Your attempts: {attempt.count} · best {attempt.best_score ?? '—'}
+            {attempt.last_status === 'submitted' && attempt.last_receipt
+              ? ` · receipt ${attempt.last_receipt}`
+              : ''}
+          </p>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2 pt-2">
+          {pub && (
+            <Button asChild variant="secondary" size="sm">
+              <Link to={`/quizzes/${quiz.quiz_id}/preflight`}>
+                {attempt?.in_progress ? 'Continue attempt' : role === 'student' ? 'Take quiz' : 'View published'}
+              </Link>
+            </Button>
+          )}
+          {isStaff && draft && (
+            <Button asChild variant="secondary" size="sm">
+              <Link to={`/quizzes/${quiz.quiz_id}`}>
+                <Edit className="size-3" aria-hidden="true" />
+                Edit draft
+              </Link>
+            </Button>
+          )}
+          {isStaff && pub && (
+            <>
+              <Button asChild variant="secondary" size="sm">
+                <Link to={`/analytics/version/${pub.id}`}>
+                  <LayoutDashboard className="size-3" aria-hidden="true" />
+                  Analytics
+                </Link>
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => void onRelease(pub.id)}>
+                <RefreshCw className="size-3" aria-hidden="true" />
+                Release results
+              </Button>
+              <Button asChild variant="secondary" size="sm">
+                <Link to={`/quizzes/${quiz.quiz_id}`}>
+                  <Eye className="size-3" aria-hidden="true" />
+                  View
+                </Link>
+              </Button>
+            </>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Roster table — @tanstack/react-table with columns name, email, role badge,
+ * and (instructor only) a remove action confirmed via AlertDialog.
+ */
+function RosterTable({
+  roster,
+  onRemove,
+}: {
+  roster: RosterMember[];
+  onRemove: (member: RosterMember) => void;
+}) {
+  const columns = useMemo<ColumnDef<RosterMember>[]>(
+    () => [
+      {
+        accessorKey: 'name',
+        header: 'Name',
+        cell: ({ getValue }) => <span className="font-medium">{getValue<string>()}</span>,
+      },
+      {
+        accessorKey: 'email',
+        header: 'Email',
+        cell: ({ getValue }) => (
+          <span className="text-muted-foreground font-mono">{getValue<string>()}</span>
+        ),
+      },
+      {
+        accessorKey: 'role',
+        header: 'Role',
+        cell: ({ getValue }) => {
+          const r = getValue<string>();
+          const info = roleBadge(r);
+          return (
+            <Badge variant={info.variant} className="inline-flex items-center gap-1">
+              {info.icon}
+              {info.label}
+            </Badge>
+          );
+        },
+      },
+      {
+        id: 'actions',
+        header: () => <span className="sr-only">Actions</span>,
+        cell: ({ row }) => (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-destructive hover:text-destructive"
+            onClick={() => onRemove(row.original)}
+          >
+            <Trash2 className="size-4" aria-hidden="true" />
+            <span className="sr-only">Remove {row.original.name}</span>
+          </Button>
+        ),
+      },
+    ],
+    [onRemove],
+  );
+
+  const table = useReactTable({
+    data: roster,
+    columns,
+    getCoreRowModel: getCoreRowModel(),
+  });
+
+  if (roster.length === 0) {
+    return (
+      <EmptyState
+        icon={Users}
+        title="No members yet"
+        description="Add members to give them access to this course."
+      />
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-[var(--radius-lg)] border">
+      <table className="w-full border-collapse text-sm">
+        <thead>
+          {table.getHeaderGroups().map((hg) => (
+            <tr key={hg.id}>
+              {hg.headers.map((h) => (
+                <th
+                  key={h.id}
+                  className="bg-muted px-3 py-2 text-left font-medium uppercase text-muted-foreground"
+                >
+                  {h.isPlaceholder ? null : flexRender(h.column.columnDef.header, h.getContext())}
+                </th>
+              ))}
+            </tr>
+          ))}
+        </thead>
+        <tbody>
+          {table.getRowModel().rows?.length ? (
+            table.getRowModel().rows.map((row) => (
+              <tr key={row.id} className="border-b transition-colors">
+                {row.getVisibleCells().map((cell) => (
+                  <td key={cell.id} className="px-3 py-2 align-top">
+                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                  </td>
+                ))}
+              </tr>
+            ))
+          ) : (
+            <tr>
+              <td colSpan={columns.length} className="py-8 text-center text-muted-foreground">
+                No members.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-function RosterCard({
+/**
+ * Add member form — react-hook-form + zod. PUTs to /courses/:courseId/members.
+ */
+function AddMemberForm({
   courseId,
-  roster,
-  onAdd,
-  onRemove,
+  onSubmit,
 }: {
   courseId: number;
-  roster: RosterResponse['roster'];
-  onAdd: (email: string, role: string) => void;
-  onRemove: (userId: number) => void;
+  onSubmit: (data: AddMemberForm) => Promise<void>;
 }) {
-  const [email, setEmail] = useState('');
-  const [role, setRole] = useState('student');
-  void courseId;
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors, isSubmitting },
+  } = useForm<AddMemberForm>({
+    resolver: zodResolver(addMemberSchema),
+    defaultValues: { email: '', memberRole: 'student' },
+  });
+
+  const handleValid = async (data: AddMemberForm) => {
+    await onSubmit(data);
+    reset({ email: '', memberRole: 'student' });
+  };
+
   return (
-    <section style={{ marginTop: '2rem' }}>
-      <h2>Roster</h2>
-      <div className="card">
-        <div className="field-row" style={{ marginBottom: '0.9rem' }}>
-          <div className="field grow" style={{ marginBottom: 0 }}>
-            <label htmlFor="member-email">Add member (uses existing account email)</label>
-            <input
-              id="member-email"
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle>Add member</CardTitle>
+        <CardDescription>
+          Uses the email of an existing account. The member must already have an
+          Interval account registered with this email.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSubmit(handleValid)} noValidate className="flex flex-wrap items-end gap-3">
+          <div className="flex-1 min-w-[200px]">
+            <Label htmlFor={`member-email-${courseId}`}>Email</Label>
+            <Input
+              id={`member-email-${courseId}`}
               type="email"
               placeholder="student@iitrpr.ac.in"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              aria-invalid={!!errors.email}
+              aria-describedby={errors.email ? `member-email-${courseId}-error` : undefined}
+              {...register('email')}
             />
+            {errors.email && (
+              <p id={`member-email-${courseId}-error`} role="alert" className="mt-1 text-xs text-destructive">
+                {errors.email.message}
+              </p>
+            )}
           </div>
-          <div className="field" style={{ marginBottom: 0 }}>
-            <label htmlFor="member-role">Role</label>
-            <select id="member-role" value={role} onChange={(e) => setRole(e.target.value)}>
-              <option value="student">Student</option>
-              <option value="ta">TA</option>
-              <option value="instructor">Instructor</option>
+          <div className="min-w-[140px]">
+            <Label htmlFor={`member-role-${courseId}`}>Role</Label>
+            <select
+              id={`member-role-${courseId}`}
+              className="w-full rounded-[var(--radius-md)] border border-[var(--line-strong)] bg-card px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+              {...register('memberRole')}
+            >
+              {MEMBER_ROLE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
             </select>
           </div>
-          <button
-            className="btn secondary"
-            style={{ alignSelf: 'flex-end' }}
-            disabled={!email}
-            onClick={() => {
-              void onAdd(email, role);
-              setEmail('');
-            }}
-          >
-            Add
-          </button>
-        </div>
-        {roster.length === 0 ? (
-          <p className="muted small">No members yet.</p>
-        ) : (
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Role</th>
-                <th aria-label="actions"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {roster.map((m) => (
-                <tr key={m.id}>
-                  <td>{m.name}</td>
-                  <td className="mono">{m.email}</td>
-                  <td><Pill tone={m.role === 'instructor' ? 'brand' : m.role === 'ta' ? 'warn' : 'neutral'} symbol="·">{m.role}</Pill></td>
-                  <td>
-                    <button className="btn small ghost-danger" onClick={() => void onRemove(m.id)}>Remove</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </section>
+          <Button type="submit" variant="secondary" disabled={isSubmitting}>
+            {isSubmitting ? (
+              <>
+                <RefreshCw className="size-4 animate-spin" aria-hidden="true" />
+                Adding…
+              </>
+            ) : (
+              'Add'
+            )}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
