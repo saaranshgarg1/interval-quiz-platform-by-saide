@@ -33,6 +33,7 @@ export interface RosterResponse {
 export type QuestionType = 'single' | 'multiple' | 'short' | 'numeric';
 export type IntegrityPolicy = 'off' | 'warn' | 'strict';
 export type ShowScores = 'never' | 'release' | 'immediate';
+export type QuizType = 'anytime' | 'scheduled';
 
 export interface QuestionEditor {
   id: number;
@@ -67,6 +68,9 @@ export interface VersionDetail {
   integrity_policy: IntegrityPolicy;
   policy_trigger: string;
   show_scores: ShowScores;
+  quiz_type: QuizType;
+  window_opens_at: string | null;
+  window_duration_minutes: number | null;
   published_at: string | null;
   created_at: string;
   questions: QuestionEditor[];

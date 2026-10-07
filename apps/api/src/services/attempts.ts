@@ -11,7 +11,7 @@ import {
   accommodationRepo,
 } from '../repo.js';
 import { AppError } from '../auth.js';
-import { shuffle, nowUtc, addMinutes, jsonParse, makeReceipt, randomToken } from '../util.js';
+import { shuffle, nowUtc, addMinutes, addMinutesTo, jsonParse, makeReceipt, randomToken } from '../util.js';
 import { gradeAttempt } from './grading.js';
 import { applyIntegrityEvent } from './policy.js';
 import type { IntegralAttemptView, AttemptAnswer, SaveAck, SubmitResult } from '../api-types.js';
@@ -89,6 +89,22 @@ export function startAttempt(userId: number, quizVersionId: number): IntegralAtt
   const courseRole = courseRepo.courseRole(version.course_id, userId);
   if (!courseRole) throw new AppError(403, 'You are not enrolled in this course.');
 
+  // Scheduled quizzes are attemptable only inside their availability window. (item 8)
+  if (version.quiz_type === 'scheduled') {
+    if (!version.window_opens_at || !version.window_duration_minutes) {
+      throw new AppError(403, 'This scheduled quiz has no availability window set.');
+    }
+    const now = nowUtc();
+    const opensAt = version.window_opens_at;
+    const closesAt = addMinutesTo(version.window_opens_at, version.window_duration_minutes);
+    if (now < opensAt) {
+      throw new AppError(403, `This quiz opens at ${opensAt} UTC.`);
+    }
+    if (now >= closesAt) {
+      throw new AppError(403, 'The availability window for this quiz has closed.');
+    }
+  }
+
   const used = attemptRepo.usedAttempts(userId, quizVersionId);
   if (used >= version.attempts_allowed) {
     throw new AppError(403, `Attempt limit reached (${version.attempts_allowed}).`);
@@ -117,7 +133,12 @@ export function startAttempt(userId: number, quizVersionId: number): IntegralAtt
     }
   }
 
-  const expiresAt = duration ? addMinutes(duration) : null;
+  let expiresAt = duration ? addMinutes(duration) : null;
+  // Scheduled quiz: the per-attempt timer never runs past the window close.
+  if (version.quiz_type === 'scheduled' && version.window_opens_at && version.window_duration_minutes) {
+    const closesAt = addMinutesTo(version.window_opens_at, version.window_duration_minutes);
+    expiresAt = expiresAt && expiresAt < closesAt ? expiresAt : closesAt;
+  }
   const attemptId = attemptRepo.create(quizVersionId, userId, JSON.stringify(order), seed, expiresAt);
   return buildAttemptView(attemptId, userId);
 }

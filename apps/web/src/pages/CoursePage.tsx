@@ -13,8 +13,10 @@ import {
 import {
   BookOpen,
   Clock,
+  Copy,
   Edit,
   Eye,
+  History,
   LayoutDashboard,
   Plus,
   RefreshCw,
@@ -23,7 +25,7 @@ import {
 } from 'lucide-react';
 import { api, ApiError } from '../api';
 import { useAuth } from '../auth';
-import type { RosterMember, QuizList } from '../types';
+import type { RosterMember, QuizList, VersionDetail } from '../types';
 import { useCourse, useCourseQuizzes, qk } from '../lib/queries';
 import { toast } from '../components/ui/sonner';
 import { Page, EmptyState, ErrorState, LoadingSkeleton } from '../components/primitives';
@@ -43,6 +45,15 @@ import {
   AlertDialogAction,
   AlertDialogCancel,
 } from '../components/ui/alert-dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '../components/ui/dialog';
+import { Textarea } from '../components/ui/textarea';
 import { AccommodationsModal } from '../components/AccommodationsModal';
 
 /**
@@ -67,6 +78,12 @@ const addMemberSchema = z.object({
   memberRole: z.enum(['student', 'ta', 'instructor']),
 });
 type AddMemberForm = z.infer<typeof addMemberSchema>;
+
+const bulkEnrollSchema = z.object({
+  emails: z.string().min(1, 'Enter at least one email address.'),
+  memberRole: z.enum(['student', 'ta', 'instructor']),
+});
+type BulkEnrollForm = z.infer<typeof bulkEnrollSchema>;
 
 /** Map a role string to a badge variant + icon. Colour is a secondary cue. */
 function roleBadge(role: string): { variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline'; icon: React.ReactNode; label: string } {
@@ -162,6 +179,46 @@ export function CoursePage() {
     }
   };
 
+  const handleCopyQuiz = async (quizId: number) => {
+    try {
+      await api.post<{ quiz_id: number }>(`/quizzes/${quizId}/copy`, {});
+      toast.success('Quiz duplicated.');
+      void qc.invalidateQueries({ queryKey: qk.courseQuizzes(cid) });
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Copy failed.');
+    }
+  };
+
+  const handleDeleteQuiz = async (quizId: number) => {
+    try {
+      await api.del(`/quizzes/${quizId}`);
+      toast.success('Quiz deleted.');
+      void qc.invalidateQueries({ queryKey: qk.courseQuizzes(cid) });
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Delete failed.');
+    }
+  };
+
+  const handleBulkEnroll = async (data: BulkEnrollForm) => {
+    try {
+      const emails = data.emails
+        .split(/[\n,]+/)
+        .map((e) => e.trim())
+        .filter((e) => e.length > 0);
+      const result = await api.post<{ enrolled: any[]; not_found: string[] }>(
+        `/courses/${cid}/members/bulk`,
+        { emails, memberRole: data.memberRole },
+      );
+      toast.success(`Enrolled ${result.enrolled.length} member(s).`);
+      if (result.not_found.length > 0) {
+        toast.error(`Not found: ${result.not_found.join(', ')}`);
+      }
+      void qc.invalidateQueries({ queryKey: qk.course(cid) });
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Bulk enroll failed.');
+    }
+  };
+
   if (!cid || Number.isNaN(cid)) {
     return (
       <Page title="Course" description="Invalid course id." width="wide">
@@ -252,6 +309,9 @@ export function CoursePage() {
                 role={role}
                 isStaff={isStaff}
                 onRelease={handleRelease}
+                onCopy={handleCopyQuiz}
+                onDelete={handleDeleteQuiz}
+                onInvalidate={() => qc.invalidateQueries({ queryKey: qk.courseQuizzes(cid) })}
               />
             ))}
           </div>
@@ -267,6 +327,7 @@ export function CoursePage() {
             onRemove={(m) => setRemoveTarget(m)}
           />
           <AddMemberForm courseId={cid} onSubmit={handleAddMember} />
+          <BulkEnrollForm courseId={cid} onSubmit={handleBulkEnroll} />
         </section>
       )}
 
@@ -315,12 +376,23 @@ function QuizCard({
   role,
   isStaff,
   onRelease,
+  onCopy,
+  onDelete,
+  onInvalidate,
 }: {
   quiz: QuizList;
   role: string;
   isStaff: boolean;
   onRelease: (versionId: number) => void;
+  onCopy: (quizId: number) => void;
+  onDelete: (quizId: number) => void;
+  onInvalidate: () => void;
 }) {
+  const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const [versions, setVersions] = useState<VersionDetail[]>([]);
+  const [loadingVersions, setLoadingVersions] = useState(false);
+
   const pub = quiz.published;
   const draft = quiz.draft;
   const title = pub?.title ?? draft?.title ?? 'Untitled quiz';
@@ -329,6 +401,33 @@ function QuizCard({
 
   const attempt = pub?.my_attempts;
   const hasAttempts = pub?.attempts && pub.attempts.total > 0;
+
+  const handleOpenVersions = async () => {
+    setVersionsOpen(true);
+    setLoadingVersions(true);
+    try {
+      const d = await api.get<{ versions: VersionDetail[] }>(`/quizzes/${quiz.quiz_id}`);
+      setVersions(d.versions);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to load versions.');
+    } finally {
+      setLoadingVersions(false);
+    }
+  };
+
+  const handleRestore = async (version: number) => {
+    try {
+      await api.post(`/quizzes/${quiz.quiz_id}/versions/${version}/restore`, {});
+      toast.success(`Restored v${version} into a new draft.`);
+      onInvalidate();
+      setVersionsOpen(false);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Restore failed.');
+    }
+  };
+
+  const currentVersion = pub ?? draft;
+  const isScheduled = currentVersion?.quiz_type === 'scheduled';
 
   return (
     <Card>
@@ -345,6 +444,13 @@ function QuizCard({
             <Badge variant={draftBadge.variant} className="inline-flex items-center gap-1">
               {draftBadge.icon}
               {draftBadge.label}
+            </Badge>
+          )}
+          {isScheduled && currentVersion?.window_opens_at && (
+            <Badge variant="outline" className="inline-flex items-center gap-1">
+              <Clock className="size-3" aria-hidden="true" />
+              Scheduled: opens {new Date(currentVersion.window_opens_at).toLocaleString()}
+              {currentVersion.window_duration_minutes && ` · ${currentVersion.window_duration_minutes} min`}
             </Badge>
           )}
         </CardDescription>
@@ -414,8 +520,86 @@ function QuizCard({
               </Button>
             </>
           )}
+          {isStaff && (
+            <>
+              <Button variant="secondary" size="sm" onClick={handleOpenVersions}>
+                <History className="size-3" aria-hidden="true" />
+                Versions
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => onCopy(quiz.quiz_id)}>
+                <Copy className="size-3" aria-hidden="true" />
+                Copy
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setDeleteTarget(quiz.quiz_id)}>
+                <Trash2 className="size-3" aria-hidden="true" />
+                Delete
+              </Button>
+            </>
+          )}
         </div>
       </CardContent>
+
+      {/* Versions dialog */}
+      <Dialog open={versionsOpen} onOpenChange={setVersionsOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Version History</DialogTitle>
+            <DialogDescription>
+              Restore a prior version to create a new draft based on it.
+            </DialogDescription>
+          </DialogHeader>
+          {loadingVersions ? (
+            <p className="text-sm text-muted-foreground">Loading versions...</p>
+          ) : versions.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No versions available.</p>
+          ) : (
+            <div className="space-y-2">
+              {versions.map((v) => (
+                <div
+                  key={v.id}
+                  className="flex items-center justify-between rounded-[var(--radius-md)] border p-3"
+                >
+                  <div className="text-sm">
+                    <span className="font-medium">v{v.version}</span> · {v.status} · {v.questions.length} Qs
+                  </div>
+                  <Button variant="secondary" size="sm" onClick={() => void handleRestore(v.version)}>
+                    Restore
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setVersionsOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation */}
+      <AlertDialog open={deleteTarget === quiz.quiz_id} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {title}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete this quiz and all its versions. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:brightness-105"
+              onClick={() => {
+                if (deleteTarget) onDelete(deleteTarget);
+                setDeleteTarget(null);
+              }}
+            >
+              Delete quiz
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }
@@ -609,6 +793,87 @@ function AddMemberForm({
               </>
             ) : (
               'Add'
+            )}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Bulk enroll form — allows staff to add multiple members at once.
+ */
+function BulkEnrollForm({
+  courseId,
+  onSubmit,
+}: {
+  courseId: number;
+  onSubmit: (data: BulkEnrollForm) => Promise<void>;
+}) {
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors, isSubmitting },
+  } = useForm<BulkEnrollForm>({
+    resolver: zodResolver(bulkEnrollSchema),
+    defaultValues: { emails: '', memberRole: 'student' },
+  });
+
+  const handleValid = async (data: BulkEnrollForm) => {
+    await onSubmit(data);
+    reset({ emails: '', memberRole: 'student' });
+  };
+
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle>Bulk enroll</CardTitle>
+        <CardDescription>
+          Add multiple members at once. Separate emails with newlines or commas.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSubmit(handleValid)} noValidate className="space-y-3">
+          <div>
+            <Label htmlFor={`bulk-emails-${courseId}`}>Emails</Label>
+            <Textarea
+              id={`bulk-emails-${courseId}`}
+              placeholder="student1@iitrpr.ac.in, student2@iitrpr.ac.in"
+              rows={4}
+              aria-invalid={!!errors.emails}
+              aria-describedby={errors.emails ? `bulk-emails-${courseId}-error` : undefined}
+              {...register('emails')}
+            />
+            {errors.emails && (
+              <p id={`bulk-emails-${courseId}-error`} role="alert" className="mt-1 text-xs text-destructive">
+                {errors.emails.message}
+              </p>
+            )}
+          </div>
+          <div>
+            <Label htmlFor={`bulk-role-${courseId}`}>Role</Label>
+            <select
+              id={`bulk-role-${courseId}`}
+              className="w-full rounded-[var(--radius-md)] border border-[var(--line-strong)] bg-card px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+              {...register('memberRole')}
+            >
+              {MEMBER_ROLE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Button type="submit" variant="secondary" disabled={isSubmitting}>
+            {isSubmitting ? (
+              <>
+                <RefreshCw className="size-4 animate-spin" aria-hidden="true" />
+                Enrolling…
+              </>
+            ) : (
+              'Enroll members'
             )}
           </Button>
         </form>

@@ -18,6 +18,7 @@ import {
   type IntegrityPolicy,
   type PolicyTrigger,
   type ShowScores,
+  type QuizType,
   type QuestionBank,
   type BankQuestion,
   type StudentAccommodation,
@@ -157,6 +158,43 @@ export const courseRepo = {
       userId,
     );
   },
+  /**
+   * Enroll a list of emails as students. Reports which emails had no account.
+   * Existing members keep their role (INSERT OR IGNORE). Item 12.
+   */
+  bulkEnroll(
+    courseId: number,
+    emails: string[],
+    role: CourseRole = 'student',
+  ): { enrolled: PublicUser[]; not_found: string[] } {
+    const enrolled: PublicUser[] = [];
+    const not_found: string[] = [];
+    const seen = new Set<string>();
+    db.exec('BEGIN');
+    try {
+      for (const raw of emails) {
+        const email = raw.trim();
+        if (!email) continue;
+        const key = email.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const user = userRepo.findByEmail(email);
+        if (!user) {
+          not_found.push(email);
+          continue;
+        }
+        db.prepare(
+          'INSERT OR IGNORE INTO memberships (course_id, user_id, role) VALUES (?, ?, ?)',
+        ).run(courseId, user.id, role);
+        enrolled.push(pubUser(user));
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+    return { enrolled, not_found };
+  },
   canManage(courseId: number, userId: number): boolean {
     const role = courseRepo.courseRole(courseId, userId);
     return role === 'instructor' || role === 'ta';
@@ -164,6 +202,65 @@ export const courseRepo = {
 };
 
 // ---------------------------------------------------------------- quizzes
+
+/** Insert a draft quiz_version row copying all content columns from `src`. Must run inside a txn. */
+function cloneVersionRow(
+  src: QuizVersion,
+  quizId: number,
+  courseId: number,
+  createdBy: number,
+  version: number,
+): number {
+  const res = db
+    .prepare(
+      `INSERT INTO quiz_versions
+         (quiz_id, course_id, created_by, version, status, title, instructions,
+          duration_minutes, shuffle_questions, shuffle_options, attempts_allowed,
+          integrity_policy, policy_trigger, show_scores,
+          quiz_type, window_opens_at, window_duration_minutes)
+       VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      quizId,
+      courseId,
+      createdBy,
+      version,
+      src.title,
+      src.instructions,
+      src.duration_minutes,
+      src.shuffle_questions,
+      src.shuffle_options,
+      src.attempts_allowed,
+      src.integrity_policy,
+      src.policy_trigger,
+      src.show_scores,
+      src.quiz_type,
+      src.window_opens_at,
+      src.window_duration_minutes,
+    );
+  return Number(res.lastInsertRowid);
+}
+
+/** Copy every question from one version to another (as v1/latest). Must run inside a txn. */
+function copyQuestions(fromVersionId: number, toVersionId: number): void {
+  const sourceQuestions = questionRepo.listForVersion(fromVersionId);
+  for (const q of sourceQuestions) {
+    db.prepare(
+      `INSERT INTO questions
+         (quiz_version_id, version, qtype, text, options, answer, tolerance, points, order_index)
+       VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      toVersionId,
+      q.qtype,
+      q.text,
+      JSON.stringify(q.options),
+      q.answer == null ? 'null' : JSON.stringify(q.answer),
+      q.tolerance,
+      q.points,
+      q.order_index,
+    );
+  }
+}
 
 export const quizRepo = {
   get(id: number): Quiz | undefined {
@@ -179,6 +276,61 @@ export const quizRepo = {
     return db
       .prepare('SELECT * FROM quizzes WHERE course_id = ? ORDER BY id')
       .all(courseId) as Quiz[];
+  },
+  /**
+   * Deep-copy a quiz into a fresh quiz in the same course: a single draft v1
+   * carrying the latest version's content. Item 9.
+   */
+  copy(sourceQuizId: number, createdBy: number): number {
+    db.exec('BEGIN');
+    try {
+      const source = quizRepo.get(sourceQuizId);
+      if (!source) throw new Error('quiz not found');
+      const src = quizVersionRepo.latest(sourceQuizId);
+      if (!src) throw new Error('quiz has no versions');
+      const newQuizId = Number(
+        db
+          .prepare('INSERT INTO quizzes (course_id, created_by) VALUES (?, ?)')
+          .run(source.course_id, createdBy).lastInsertRowid,
+      );
+      const newVersionId = cloneVersionRow(src, newQuizId, source.course_id, createdBy, 1);
+      // Keep the copy's title distinct so instructors can tell them apart.
+      db.prepare('UPDATE quiz_versions SET title = ? WHERE id = ?').run(
+        `${src.title} (copy)`,
+        newVersionId,
+      );
+      copyQuestions(src.id, newVersionId);
+      db.exec('COMMIT');
+      return newQuizId;
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+  },
+  /**
+   * Delete a quiz and everything hanging off it. attempts have no ON DELETE
+   * CASCADE from quiz_versions, so purge them (and their children) explicitly
+   * before the version rows go. Item 10.
+   */
+  delete(quizId: number): void {
+    db.exec('BEGIN');
+    try {
+      const versionIds = (
+        db.prepare('SELECT id FROM quiz_versions WHERE quiz_id = ?').all(quizId) as {
+          id: number;
+        }[]
+      ).map((r) => r.id);
+      for (const vid of versionIds) {
+        // answer_revisions, policy_events, review_decisions, results cascade off attempts.
+        db.prepare('DELETE FROM attempts WHERE quiz_version_id = ?').run(vid);
+      }
+      // quiz_versions + questions cascade off quizzes.
+      db.prepare('DELETE FROM quizzes WHERE id = ?').run(quizId);
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
   },
 };
 
@@ -237,48 +389,29 @@ export const quizVersionRepo = {
       const latest = quizVersionRepo.latest(quizId);
       if (!latest) throw new Error('quiz not found');
       const nextVersion = latest.version + 1;
-      const src = quizVersionRepo.getByVersion(quizId, latest.version) as QuizVersion;
-      const res = db
-        .prepare(
-          `INSERT INTO quiz_versions
-             (quiz_id, course_id, created_by, version, status, title, instructions,
-              duration_minutes, shuffle_questions, shuffle_options, attempts_allowed,
-              integrity_policy, policy_trigger, show_scores)
-           VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          quizId,
-          src.course_id,
-          createdBy,
-          nextVersion,
-          src.title,
-          src.instructions,
-          src.duration_minutes,
-          src.shuffle_questions,
-          src.shuffle_options,
-          src.attempts_allowed,
-          src.integrity_policy,
-          src.policy_trigger,
-          src.show_scores,
-        );
-      const newVersionId = Number(res.lastInsertRowid);
-      const sourceQuestions = questionRepo.listForVersion(src.id);
-      for (const q of sourceQuestions) {
-        db.prepare(
-          `INSERT INTO questions
-             (quiz_version_id, version, qtype, text, options, answer, tolerance, points, order_index)
-           VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          newVersionId,
-          q.qtype,
-          q.text,
-          JSON.stringify(q.options),
-          q.answer == null ? 'null' : JSON.stringify(q.answer),
-          q.tolerance,
-          q.points,
-          q.order_index,
-        );
-      }
+      const newVersionId = cloneVersionRow(latest, quizId, latest.course_id, createdBy, nextVersion);
+      copyQuestions(latest.id, newVersionId);
+      db.exec('COMMIT');
+      return quizVersionRepo.getByVersion(quizId, nextVersion) as QuizVersion;
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+  },
+  /**
+   * Restore a prior version: clone the chosen source version's content into a
+   * brand-new draft on top of the stack (never mutates history). Item 6.
+   */
+  restoreVersion(quizId: number, sourceVersion: number, createdBy: number): QuizVersion {
+    db.exec('BEGIN');
+    try {
+      const src = quizVersionRepo.getByVersion(quizId, sourceVersion);
+      if (!src) throw new Error('source version not found');
+      const latest = quizVersionRepo.latest(quizId);
+      if (!latest) throw new Error('quiz not found');
+      const nextVersion = latest.version + 1;
+      const newVersionId = cloneVersionRow(src, quizId, src.course_id, createdBy, nextVersion);
+      copyQuestions(src.id, newVersionId);
       db.exec('COMMIT');
       return quizVersionRepo.getByVersion(quizId, nextVersion) as QuizVersion;
     } catch (e) {
@@ -300,9 +433,20 @@ export const quizVersionRepo = {
         | 'integrity_policy'
         | 'policy_trigger'
         | 'show_scores'
+        | 'quiz_type'
+        | 'window_opens_at'
+        | 'window_duration_minutes'
       >
     >,
   ): void {
+    // Columns where NULL is a meaningful value the caller may want to persist
+    // (clearing a scheduled window / unlimited duration). Everything else keeps
+    // the historical "skip null" behaviour.
+    const nullable = new Set<keyof typeof meta>([
+      'duration_minutes',
+      'window_opens_at',
+      'window_duration_minutes',
+    ]);
     const allowed: (keyof typeof meta)[] = [
       'title',
       'instructions',
@@ -313,15 +457,19 @@ export const quizVersionRepo = {
       'integrity_policy',
       'policy_trigger',
       'show_scores',
+      'quiz_type',
+      'window_opens_at',
+      'window_duration_minutes',
     ];
     const sets: string[] = [];
     const args: (string | number | null)[] = [];
     for (const key of allowed) {
+      if (!(key in meta)) continue;
       const value = meta[key];
-      if (value !== undefined && value !== null) {
-        sets.push(`${key} = ?`);
-        args.push(value as string | number);
-      }
+      if (value === undefined) continue;
+      if (value === null && !nullable.has(key)) continue;
+      sets.push(`${key} = ?`);
+      args.push(value as string | number | null);
     }
     if (sets.length === 0) return;
     args.push(id);

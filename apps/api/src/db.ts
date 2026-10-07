@@ -221,6 +221,20 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor_id);
     `,
   },
+  {
+    version: 3,
+    name: 'scheduled_quiz_window',
+    // Timed quizzes: an availability window on top of the per-attempt timer.
+    //   quiz_type = 'anytime'   → attemptable whenever published (default; existing behaviour).
+    //   quiz_type = 'scheduled' → attemptable only inside [window_opens_at, window_opens_at + window_duration_minutes).
+    // duration_minutes still governs each individual attempt's countdown.
+    sql: `
+      ALTER TABLE quiz_versions ADD COLUMN quiz_type TEXT NOT NULL DEFAULT 'anytime'
+        CHECK (quiz_type IN ('anytime','scheduled'));
+      ALTER TABLE quiz_versions ADD COLUMN window_opens_at TEXT;
+      ALTER TABLE quiz_versions ADD COLUMN window_duration_minutes INTEGER;
+    `,
+  },
 ];
 
 /** Apply pending migrations in order, each in its own transaction. Idempotent. */

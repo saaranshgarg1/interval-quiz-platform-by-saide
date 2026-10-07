@@ -31,6 +31,7 @@ export type QuizStatus = 'draft' | 'published' | 'archived';
 export type IntegrityPolicy = 'off' | 'warn' | 'strict';
 export type PolicyTrigger = 'focus_exit' | 'page_hidden';
 export type ShowScores = 'never' | 'release' | 'immediate';
+export type QuizType = 'anytime' | 'scheduled';
 
 export interface QuizVersion {
   id: number;
@@ -48,6 +49,9 @@ export interface QuizVersion {
   integrity_policy: IntegrityPolicy;
   policy_trigger: PolicyTrigger;
   show_scores: ShowScores;
+  quiz_type: QuizType;
+  window_opens_at: string | null;
+  window_duration_minutes: number | null;
   published_at: string | null;
   archived_at: string | null;
   created_at: string;

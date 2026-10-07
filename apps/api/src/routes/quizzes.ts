@@ -10,6 +10,7 @@ import {
 } from '../repo.js';
 import type { CourseRole, QuestionType } from '../types.js';
 import { assertStaff, assertMember, assertInstructor, writeAudit } from '../authz.js';
+import { dateToUtc } from '../util.js';
 
 export const quizzesRouter = Router();
 
@@ -34,6 +35,9 @@ function versionDetail(versionId: number, viewerId: number, role: CourseRole | '
     integrity_policy: version.integrity_policy,
     policy_trigger: version.policy_trigger,
     show_scores: version.show_scores,
+    quiz_type: version.quiz_type,
+    window_opens_at: version.window_opens_at,
+    window_duration_minutes: version.window_duration_minutes,
     published_at: version.published_at,
     created_at: version.created_at,
     questions: questions.map((q) => ({
@@ -157,6 +161,37 @@ quizzesRouter.put('/:quizId', (req: AuthedRequest, res) => {
   if (body.show_scores !== undefined && !['never', 'release', 'immediate'].includes(body.show_scores)) {
     throw new AppError(400, 'Invalid show-scores policy.');
   }
+  if (body.quiz_type !== undefined && !['anytime', 'scheduled'].includes(body.quiz_type)) {
+    throw new AppError(400, 'Invalid quiz type.');
+  }
+  // Determine the effective quiz_type after this update to validate the window.
+  const effectiveType = body.quiz_type !== undefined ? body.quiz_type : draft.quiz_type;
+  let windowOpensAt: string | null | undefined;
+  let windowDuration: number | null | undefined;
+  if (body.window_opens_at !== undefined) {
+    if (body.window_opens_at === null || body.window_opens_at === '') {
+      windowOpensAt = null;
+    } else {
+      const t = new Date(String(body.window_opens_at));
+      if (Number.isNaN(t.getTime())) throw new AppError(400, 'Window start time is not a valid date.');
+      windowOpensAt = dateToUtc(String(body.window_opens_at));
+    }
+  }
+  if (body.window_duration_minutes !== undefined) {
+    if (body.window_duration_minutes === null || body.window_duration_minutes === '') {
+      windowDuration = null;
+    } else {
+      const w = Number(body.window_duration_minutes);
+      if (!Number.isInteger(w) || w < 1) throw new AppError(400, 'Window duration must be a positive integer.');
+      windowDuration = w;
+    }
+  }
+  if (effectiveType === 'scheduled') {
+    const finalOpens = windowOpensAt !== undefined ? windowOpensAt : draft.window_opens_at;
+    const finalDur = windowDuration !== undefined ? windowDuration : draft.window_duration_minutes;
+    if (!finalOpens) throw new AppError(400, 'Scheduled quizzes need a window start time.');
+    if (!finalDur) throw new AppError(400, 'Scheduled quizzes need a window duration.');
+  }
   quizVersionRepo.updateMeta(draft.id, {
     title: body.title !== undefined ? String(body.title) : undefined,
     instructions: body.instructions !== undefined ? String(body.instructions) : undefined,
@@ -169,6 +204,9 @@ quizzesRouter.put('/:quizId', (req: AuthedRequest, res) => {
     integrity_policy: body.integrity_policy,
     policy_trigger: body.policy_trigger,
     show_scores: body.show_scores,
+    quiz_type: body.quiz_type,
+    window_opens_at: windowOpensAt,
+    window_duration_minutes: windowDuration,
   });
   res.json(versionDetail(draft.id, req.userId as number, role));
 });
@@ -181,6 +219,53 @@ quizzesRouter.post('/:quizId/versions', (req: AuthedRequest, res) => {
   const role = assertStaff(req, quiz.course_id);
   const newDraft = quizVersionRepo.clonePublished(quiz.id, req.userId as number);
   res.status(201).json(versionDetail(newDraft.id, req.userId as number, role));
+});
+
+// --------------------------------------------------------- restore a version (item 6)
+
+quizzesRouter.post('/:quizId/versions/:version/restore', (req: AuthedRequest, res) => {
+  const quiz = quizRepo.get(Number(req.params.quizId));
+  if (!quiz) throw new AppError(404, 'Quiz not found.');
+  const role = assertStaff(req, quiz.course_id);
+  const sourceVersion = Number(req.params.version);
+  const src = quizVersionRepo.getByVersion(quiz.id, sourceVersion);
+  if (!src) throw new AppError(404, 'That version does not exist.');
+  const newDraft = quizVersionRepo.restoreVersion(quiz.id, sourceVersion, req.userId as number);
+  writeAudit(req, {
+    action: 'quiz.version.restore',
+    course_id: quiz.course_id,
+    target: 'quiz:' + quiz.id,
+    after: { restored_from: sourceVersion, new_version: newDraft.version },
+  });
+  res.status(201).json(versionDetail(newDraft.id, req.userId as number, role));
+});
+
+// --------------------------------------------------------- copy a quiz (item 9)
+
+quizzesRouter.post('/:quizId/copy', (req: AuthedRequest, res) => {
+  const quiz = quizRepo.get(Number(req.params.quizId));
+  if (!quiz) throw new AppError(404, 'Quiz not found.');
+  const role = assertStaff(req, quiz.course_id);
+  const newQuizId = quizRepo.copy(quiz.id, req.userId as number);
+  const newDraft = quizVersionRepo.latest(newQuizId);
+  writeAudit(req, {
+    action: 'quiz.copy',
+    course_id: quiz.course_id,
+    target: 'quiz:' + quiz.id,
+    after: { new_quiz: newQuizId },
+  });
+  res.status(201).json(versionDetail((newDraft as NonNullable<typeof newDraft>).id, req.userId as number, role));
+});
+
+// --------------------------------------------------------- delete a quiz (item 10)
+
+quizzesRouter.delete('/:quizId', (req: AuthedRequest, res) => {
+  const quiz = quizRepo.get(Number(req.params.quizId));
+  if (!quiz) throw new AppError(404, 'Quiz not found.');
+  assertInstructor(req, quiz.course_id);
+  quizRepo.delete(quiz.id);
+  writeAudit(req, { action: 'quiz.delete', course_id: quiz.course_id, target: 'quiz:' + quiz.id });
+  res.json({ ok: true });
 });
 
 // ------------------------------------------------------------------- publish
@@ -316,6 +401,42 @@ quizzesRouter.delete('/questions/:questionId', (req: AuthedRequest, res) => {
   void editableDraft(req, draft.quiz_id);
   questionRepo.remove(question.id);
   res.json({ ok: true });
+});
+
+/**
+ * Item 7: once a quiz is published its question structure is frozen, but an
+ * instructor may still correct the answer key (and numeric tolerance) in place.
+ * Only `answer` + `tolerance` are mutable here; type/text/options/points are not.
+ */
+quizzesRouter.patch('/questions/:questionId/answer', (req: AuthedRequest, res) => {
+  const question = questionRepo.get(Number(req.params.questionId));
+  if (!question) throw new AppError(404, 'Question not found.');
+  const version = quizVersionRepo.get(question.quiz_version_id);
+  if (!version) throw new AppError(404, 'Quiz version not found.');
+  assertStaff(req, version.course_id);
+
+  const body = req.body ?? {};
+  if (body.answer === undefined) throw new AppError(400, 'An answer value is required.');
+  // Validate the new answer against the question's existing (frozen) shape.
+  const v = validateQuestionData({
+    qtype: question.qtype,
+    text: question.text,
+    options: question.options,
+    answer: body.answer,
+    tolerance: body.tolerance !== undefined ? body.tolerance : question.tolerance,
+  });
+  const updated = questionRepo.update(question.id, {
+    answer: v.answer,
+    tolerance: v.tolerance as number | null,
+  });
+  writeAudit(req, {
+    action: 'quiz.question.rekey',
+    course_id: version.course_id,
+    target: 'question:' + question.id,
+    before: { answer: question.answer, tolerance: question.tolerance },
+    after: { answer: v.answer, tolerance: v.tolerance ?? null },
+  });
+  res.json({ question: updated });
 });
 
 quizzesRouter.post('/:quizId/questions/reorder', (req: AuthedRequest, res) => {

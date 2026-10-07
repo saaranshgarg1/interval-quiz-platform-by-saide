@@ -60,7 +60,7 @@ Other scripts:
 pnpm run build        # tsc (api) + tsc & vite build (web) -> apps/web/dist
 pnpm run start:web    # serve the built web app on :5174
 pnpm run typecheck    # tsc --noEmit for both workspaces
-pnpm test             # API suite (node:test) — 19 tests
+pnpm test             # API suite (node:test) — 26 tests
 pnpm run test:e2e     # Playwright E2E regression in system Chromium (needs dev servers up)
 ```
 
@@ -135,6 +135,31 @@ review flow can be demonstrated immediately.
 - **Lab 6: Build** — [`docs/lab6/implementation.md`](docs/lab6/implementation.md) · [`docs/lab6/debugging.md`](docs/lab6/debugging.md).
 - **Lab 7: Test** — [`docs/lab7/testing.md`](docs/lab7/testing.md) (automated suite) · [`docs/lab7/report.md`](docs/lab7/report.md) (usability evaluation, P0/P1/P2 findings).
 - **Lab 8: Improve** — [`docs/lab8/improvements.md`](docs/lab8/improvements.md) (Lab 7 P0/P1 fixes, deeper defects found, Chromium E2E regression suite).
+
+### Lab 8 improvement set (instructor experience)
+
+Lab 7 testing surfaced that the instructor-side surfaces lagged the student player in both
+function and polish. Lab 8 closes that gap with a 13-item improvement set, all merged behind
+the existing RBAC guards and covered by new HTTP tests:
+
+| # | Improvement | Area |
+|---|-------------|------|
+| 1 | Dashboard quick-actions now navigate; equal-height cards | `DashboardPage` |
+| 2 | Draft question editor shows a list, not cards | `QuizEditorPage` |
+| 3 | Add-question panel height matches the settings card | `QuizEditorPage` |
+| 4 | Default numeric tolerance is `0.01` | `QuizEditorPage`, `QuestionBankPage` |
+| 5 | Accommodations/import modals rebuilt on shadcn `Dialog` | `AccommodationsModal` |
+| 6 | Version history — restore any prior version into a new draft | `CoursePage`, `routes/quizzes.ts` |
+| 7 | Published quizzes: answer key is re-keyable in place; structure stays frozen | `QuizEditorPage`, `routes/quizzes.ts` |
+| 8 | Two quiz types — attempt-anytime and scheduled start/duration window | editor + `services/attempts.ts` |
+| 9 | Duplicate a quiz into a fresh draft | `CoursePage`, `QuizEditorPage`, `routes/quizzes.ts` |
+| 10 | Delete a quiz (guarded) + renovated instructor home | `CoursePage`, `DashboardPage` |
+| 11 | "Create first bank" empty-state opens the New-Bank dialog | `QuestionBankPage` |
+| 12 | Course creation + bulk email enrolment (reports unknown emails) | `DashboardPage`, `CoursePage`, `routes/courses.ts` |
+| 13 | Professional, consistent course-card grid | `DashboardPage` |
+
+Backend changes are exercised by `apps/api/src/__tests__/rbac.http.test.ts` (copy, delete, restore,
+answer-rekey, scheduled-window enforcement, bulk enrol) — **26 API tests + 3 Chromium E2E, all green**.
 
 ---
 

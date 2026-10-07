@@ -215,3 +215,131 @@ test('unauthenticated requests are rejected', async () => {
   const r = await api('/api/courses');
   assert.equal(r.status, 401);
 });
+
+// --------------------------------------------------- new instructor features
+
+/** Create a published single-question quiz, returning its ids. */
+async function seedPublishedQuiz(s: Scope): Promise<{ quizId: number; questionId: number }> {
+  const created = await api(`/api/quizzes/course/${s.courseId}`, { method: 'POST', token: mint(s.instructor) });
+  const quizId = created.body.quiz_id;
+  const q = await api(`/api/quizzes/${quizId}/questions`, {
+    method: 'POST',
+    token: mint(s.instructor),
+    body: { qtype: 'single', text: 'cap?', options: ['a', 'b'], answer: 1, points: 1 },
+  });
+  await api(`/api/quizzes/${quizId}/publish`, { method: 'PATCH', token: mint(s.instructor) });
+  return { quizId, questionId: q.body.question.id };
+}
+
+test('copy quiz clones content into a fresh draft quiz (item 9)', async () => {
+  const s = seedCourse();
+  const { quizId } = await seedPublishedQuiz(s);
+  const copy = await api(`/api/quizzes/${quizId}/copy`, { method: 'POST', token: mint(s.instructor) });
+  assert.equal(copy.status, 201);
+  assert.notEqual(copy.body.quiz_id, quizId);
+  assert.equal(copy.body.status, 'draft');
+  assert.equal(copy.body.questions.length, 1);
+  assert.match(copy.body.title, /\(copy\)/);
+});
+
+test('delete quiz is instructor-only and removes it (item 10)', async () => {
+  const s = seedCourse();
+  const { quizId } = await seedPublishedQuiz(s);
+  const denied = await api(`/api/quizzes/${quizId}`, { method: 'DELETE', token: mint(s.ta) });
+  assert.equal(denied.status, 403);
+  const ok = await api(`/api/quizzes/${quizId}`, { method: 'DELETE', token: mint(s.instructor) });
+  assert.equal(ok.status, 200);
+  const gone = await api(`/api/quizzes/${quizId}`, { token: mint(s.instructor) });
+  assert.equal(gone.status, 404);
+});
+
+test('restore version clones a prior version into a new draft (item 6)', async () => {
+  const s = seedCourse();
+  const { quizId } = await seedPublishedQuiz(s);
+  const restored = await api(`/api/quizzes/${quizId}/versions/1/restore`, { method: 'POST', token: mint(s.instructor) });
+  assert.equal(restored.status, 201);
+  assert.equal(restored.body.version, 2);
+  assert.equal(restored.body.status, 'draft');
+  assert.equal(restored.body.questions.length, 1);
+});
+
+test('published question answer key is editable in place; structure is not (item 7)', async () => {
+  const s = seedCourse();
+  const { questionId } = await seedPublishedQuiz(s);
+  // Structural edit via the draft route is frozen.
+  const frozen = await api(`/api/quizzes/questions/${questionId}`, {
+    method: 'PUT',
+    token: mint(s.instructor),
+    body: { text: 'changed' },
+  });
+  assert.equal(frozen.status, 409);
+  // Answer-only rekey is allowed.
+  const rekey = await api(`/api/quizzes/questions/${questionId}/answer`, {
+    method: 'PATCH',
+    token: mint(s.instructor),
+    body: { answer: 0 },
+  });
+  assert.equal(rekey.status, 200);
+  assert.equal(rekey.body.question.answer, 0);
+});
+
+test('scheduled quiz rejects attempts outside its window (item 8)', async () => {
+  const s = seedCourse();
+  const created = await api(`/api/quizzes/course/${s.courseId}`, { method: 'POST', token: mint(s.instructor) });
+  const quizId = created.body.quiz_id;
+  await api(`/api/quizzes/${quizId}/questions`, {
+    method: 'POST',
+    token: mint(s.instructor),
+    body: { qtype: 'single', text: 'q', options: ['a', 'b'], answer: 0, points: 1 },
+  });
+  // Open a window in the future.
+  const future = new Date(Date.now() + 3_600_000).toISOString();
+  const put = await api(`/api/quizzes/${quizId}`, {
+    method: 'PUT',
+    token: mint(s.instructor),
+    body: { quiz_type: 'scheduled', window_opens_at: future, window_duration_minutes: 30 },
+  });
+  assert.equal(put.status, 200);
+  assert.equal(put.body.quiz_type, 'scheduled');
+  const draftVersionId = put.body.id;
+  await api(`/api/quizzes/${quizId}/publish`, { method: 'PATCH', token: mint(s.instructor) });
+  // Student tries to start before the window opens.
+  const start = await api(`/api/attempts/quiz/${draftVersionId}`, {
+    method: 'POST',
+    token: mint(s.student),
+  });
+  assert.equal(start.status, 403);
+  assert.match(start.body.error, /opens at/i);
+});
+
+test('scheduled quiz PUT requires a window start and duration (item 8)', async () => {
+  const s = seedCourse();
+  const created = await api(`/api/quizzes/course/${s.courseId}`, { method: 'POST', token: mint(s.instructor) });
+  const quizId = created.body.quiz_id;
+  const bad = await api(`/api/quizzes/${quizId}`, {
+    method: 'PUT',
+    token: mint(s.instructor),
+    body: { quiz_type: 'scheduled' },
+  });
+  assert.equal(bad.status, 400);
+});
+
+test('bulk enroll adds known emails and reports unknown ones (item 12)', async () => {
+  const s = seedCourse();
+  const known = seedUser('student', 'bulk');
+  const denied = await api(`/api/courses/${s.courseId}/members/bulk`, {
+    method: 'POST',
+    token: mint(s.ta),
+    body: { emails: [known.email] },
+  });
+  assert.equal(denied.status, 403);
+
+  const ok = await api(`/api/courses/${s.courseId}/members/bulk`, {
+    method: 'POST',
+    token: mint(s.instructor),
+    body: { emails: [known.email, 'ghost-nobody@example.com'] },
+  });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.enrolled.length, 1);
+  assert.deepEqual(ok.body.not_found, ['ghost-nobody@example.com']);
+});

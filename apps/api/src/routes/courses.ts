@@ -73,6 +73,33 @@ coursesRouter.put('/:courseId/members', (req: AuthedRequest, res) => {
   res.json({ ok: true, member: { ...pubUser(user), role: desiredRole } });
 });
 
+// Bulk-enroll a list of emails (item 12). Reports emails with no account.
+coursesRouter.post('/:courseId/members/bulk', (req: AuthedRequest, res) => {
+  const { course } = withCourseRole(req, Number(req.params.courseId));
+  assertInstructor(req, course.id);
+  const body = req.body ?? {};
+  const memberRole = body.memberRole === 'ta' || body.memberRole === 'instructor' ? body.memberRole : 'student';
+  // Accept either an array of emails or a newline/comma-separated string.
+  let emails: string[];
+  if (Array.isArray(body.emails)) {
+    emails = body.emails.map((e: unknown) => String(e));
+  } else if (typeof body.emails === 'string') {
+    emails = body.emails.split(/[\n,;]+/);
+  } else {
+    throw new AppError(400, 'Provide a list of emails to enroll.');
+  }
+  emails = emails.map((e) => e.trim()).filter(Boolean);
+  if (emails.length === 0) throw new AppError(400, 'Provide at least one email to enroll.');
+  const result = courseRepo.bulkEnroll(course.id, emails, memberRole);
+  writeAudit(req, {
+    action: 'course.member.bulk_enroll',
+    course_id: course.id,
+    target: 'course:' + course.id,
+    after: { enrolled: result.enrolled.length, not_found: result.not_found },
+  });
+  res.json(result);
+});
+
 coursesRouter.delete('/:courseId/members/:userId', (req: AuthedRequest, res) => {
   const { course } = withCourseRole(req, Number(req.params.courseId));
   assertInstructor(req, course.id);

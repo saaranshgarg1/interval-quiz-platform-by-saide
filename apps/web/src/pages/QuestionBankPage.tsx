@@ -257,7 +257,7 @@ function NewQuestionForm({
       options: ['', '', '', ''],
       answer: 0,
       points: 1,
-      tolerance: 0,
+      tolerance: 0.01,
       tags: '',
     },
   });
@@ -474,11 +474,13 @@ function BankList({
   selectedId,
   onSelect,
   onDelete,
+  onCreate,
 }: {
   banks: QuestionBank[];
   selectedId: number | null;
   onSelect: (bank: QuestionBank) => void;
   onDelete: (bank: QuestionBank) => void;
+  onCreate: () => void;
 }) {
   if (banks.length === 0) {
     return (
@@ -486,7 +488,7 @@ function BankList({
         title="No question banks yet"
         description="Create a bank to start organizing reusable questions."
         action={
-          <Button size="sm">
+          <Button size="sm" onClick={onCreate}>
             <Plus className="size-4" /> Create first bank
           </Button>
         }
@@ -772,6 +774,7 @@ export function QuestionBankPage() {
                 selectedId={selectedBank?.id ?? null}
                 onSelect={handleSelectBank}
                 onDelete={handleDeleteBank}
+                onCreate={() => setShowNewBank(true)}
               />
             )}
           </div>

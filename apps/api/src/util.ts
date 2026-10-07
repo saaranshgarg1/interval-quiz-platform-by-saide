@@ -14,6 +14,13 @@ export function addMinutes(minutes: number): string {
   return d.toISOString().slice(0, 23).replace('T', ' ');
 }
 
+/** Add minutes to a given UTC timestamp (SQLite 'YYYY-MM-DD HH:MM:SS.sss' or ISO). */
+export function addMinutesTo(timestamp: string, minutes: number): string {
+  const base = new Date(timestamp.replace(' ', 'T') + (timestamp.endsWith('Z') ? '' : 'Z'));
+  const d = new Date(base.getTime() + minutes * 60_000);
+  return d.toISOString().slice(0, 23).replace('T', ' ');
+}
+
 export function dateToUtc(d: string): string {
   const dt = new Date(d);
   if (Number.isNaN(dt.getTime())) return d;
