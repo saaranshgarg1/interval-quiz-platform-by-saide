@@ -1,9 +1,11 @@
 node_modules/
 dist/
 *.log
-.env
 .DS_Store
 apps/api/data/
 apps/web/.vite/
 
 .claude
+.env
+.env.*
+test-results/

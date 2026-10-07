@@ -11,6 +11,7 @@ interface CourseBlock {
   name: string;
   my_role?: string;
   quizzes: QuizList[];
+  loadError: string | null;
 }
 
 export function DashboardPage() {
@@ -24,8 +25,21 @@ export function DashboardPage() {
       const res = await api.get<{ courses: { id: number; code: string; name: string; my_role?: string }[] }>('/courses');
       const blocks: CourseBlock[] = await Promise.all(
         res.courses.map(async (c) => {
-          const qz = await api.get<CourseQuizzesResponse>(`/quizzes/course/${c.id}`);
-          return { id: c.id, code: c.code, name: c.name, my_role: c.my_role, quizzes: qz.quizzes };
+          try {
+            const qz = await api.get<CourseQuizzesResponse>(`/quizzes/course/${c.id}`);
+            return { id: c.id, code: c.code, name: c.name, my_role: c.my_role, quizzes: qz.quizzes, loadError: null };
+          } catch (err) {
+            // A failing quiz fetch must not blank the whole dashboard —
+            // surface the problem on that course card instead.
+            return {
+              id: c.id,
+              code: c.code,
+              name: c.name,
+              my_role: c.my_role,
+              quizzes: [],
+              loadError: err instanceof ApiError ? err.message : 'Failed to load quizzes.',
+            };
+          }
         }),
       );
       setCourses(blocks);
@@ -54,7 +68,11 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {error && <div className="banner error">{error}</div>}
+      {error && (
+        <div className="banner error" role="alert">
+          {error}
+        </div>
+      )}
       {courses.length === 0 && !error && <p className="muted">Loading courses…</p>}
 
       <section style={{ marginTop: '1.25rem' }}>
@@ -76,7 +94,12 @@ export function DashboardPage() {
                 </Link>
               </div>
               <div style={{ marginTop: '0.6rem', fontSize: '0.9rem' }}>
-                {published(c).length === 0 && drafts(c).length === 0 && (
+                {c.loadError && (
+                  <div className="banner error" role="alert" style={{ margin: '0 0 0.4rem', padding: '0.5rem 0.7rem', fontSize: '0.85rem' }}>
+                    Couldn’t load quizzes for this course: {c.loadError}
+                  </div>
+                )}
+                {!c.loadError && published(c).length === 0 && drafts(c).length === 0 && (
                   <span className="muted small">No quizzes yet.</span>
                 )}
                 {published(c).map((q) => {

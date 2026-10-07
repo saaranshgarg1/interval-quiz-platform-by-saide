@@ -1,4 +1,3 @@
-import { useEffect } from 'react';
 import { Routes, Route, NavLink, Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from './auth';
 import type { ReactNode } from 'react';
@@ -102,7 +101,16 @@ function Layout({ children }: { children: ReactNode }) {
 }
 
 function Shell() {
-  const { user } = useAuth();
+  const { user, ready } = useAuth();
+  // Wait for the session bootstrap before deciding — otherwise a hard refresh or
+  // deep link bounces a logged-in user to /login before their token is restored.
+  if (!ready) {
+    return (
+      <div className="min-h-[100dvh] grid place-items-center" role="status" aria-live="polite">
+        <span className="muted">Restoring your session…</span>
+      </div>
+    );
+  }
   if (!user) return <Navigate to="/login" replace />;
   return (
     <Layout>
@@ -125,20 +133,9 @@ function Shell() {
   );
 }
 
-function AuthSync() {
-  const { user, refresh } = useAuth();
-  useEffect(() => {
-    if (!user) {
-      void refresh();
-    }
-  }, [user, refresh]);
-  return null;
-}
-
 export function App() {
   return (
     <>
-      <AuthSync />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />

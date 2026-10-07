@@ -132,10 +132,22 @@ export function QuizEditorPage() {
     e.preventDefault();
     if (!draft) return;
     try {
-      await api.post(`/quizzes/${quizId}/draft/questions`, buildQuestionPayload(newQ));
+      const res = await api.post<{ question: QuestionEditor }>(`/quizzes/${quizId}/questions`, buildQuestionPayload(newQ));
       setNewQ(EMPTY_QUESTION());
       setMsg('Question added.');
-      void load();
+      // Targeted state update instead of full reload: a void load() here
+      // re-rendered the whole form and detached the in-progress fields
+      // (Lab 7 finding). Append the server row directly.
+      setDetail((prev) =>
+        prev && draft
+          ? {
+              ...prev,
+              versions: prev.versions.map((v) =>
+                v.id === draft.id ? { ...v, questions: [...v.questions, res.question] } : v,
+              ),
+            }
+          : prev,
+      );
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to add question.');
     }
@@ -145,14 +157,26 @@ export function QuizEditorPage() {
     const payload = edits[q.id];
     if (!payload) return;
     try {
-      await api.put(`/quizzes/${quizId}/draft/questions/${q.id}`, buildQuestionPayload(payload));
+      const res = await api.put<{ question: QuestionEditor }>(`/quizzes/questions/${q.id}`, buildQuestionPayload(payload));
       setEdits((prev) => {
         const next = { ...prev };
         delete next[q.id];
         return next;
       });
       setMsg('Question updated.');
-      void load();
+      // Targeted update — no full load() (see saveNewQuestion).
+      setDetail((prev) =>
+        prev && draft
+          ? {
+              ...prev,
+              versions: prev.versions.map((v) =>
+                v.id === draft.id
+                  ? { ...v, questions: v.questions.map((qq) => (qq.id === q.id ? res.question : qq)) }
+                  : v,
+              ),
+            }
+          : prev,
+      );
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to update question.');
     }
@@ -160,8 +184,17 @@ export function QuizEditorPage() {
 
   const deleteQuestion = async (q: QuestionEditor) => {
     try {
-      await api.del(`/quizzes/${quizId}/draft/questions/${q.id}`);
-      void load();
+      await api.del(`/quizzes/questions/${q.id}`);
+      setDetail((prev) =>
+        prev && draft
+          ? {
+              ...prev,
+              versions: prev.versions.map((v) =>
+                v.id === draft.id ? { ...v, questions: v.questions.filter((qq) => qq.id !== q.id) } : v,
+              ),
+            }
+          : prev,
+      );
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to delete question.');
     }
@@ -191,7 +224,7 @@ export function QuizEditorPage() {
     if (!draft) return;
     try {
       setImportingBank(true);
-      await api.post(`/quizzes/${quizId}/draft/questions`, {
+      const res = await api.post<{ question: QuestionEditor }>(`/quizzes/${quizId}/questions`, {
         qtype: bq.qtype,
         text: bq.text,
         options: bq.options,
@@ -200,7 +233,16 @@ export function QuizEditorPage() {
         points: bq.points,
       });
       setMsg(`Imported "${bq.text.slice(0, 30)}..." into draft.`);
-      void load();
+      setDetail((prev) =>
+        prev && draft
+          ? {
+              ...prev,
+              versions: prev.versions.map((v) =>
+                v.id === draft.id ? { ...v, questions: [...v.questions, res.question] } : v,
+              ),
+            }
+          : prev,
+      );
     } catch (err) {
       setError('Failed to import question from bank.');
     } finally {

@@ -9,7 +9,7 @@ import {
   attemptRepo,
 } from '../repo.js';
 import type { CourseRole, QuestionType } from '../types.js';
-import { assertStaff, assertInstructor, writeAudit } from '../authz.js';
+import { assertStaff, assertMember, assertInstructor, writeAudit } from '../authz.js';
 
 export const quizzesRouter = Router();
 
@@ -90,7 +90,7 @@ function summarizeAttemptsForVersion(versionId: number) {
 
 quizzesRouter.get('/course/:courseId', (req: AuthedRequest, res) => {
   const courseId = Number(req.params.courseId);
-  const role = assertStaff(req, courseId);
+  const role = assertMember(req, courseId); // Allow students to view quizzes
   const isStaff = role !== 'student';
 
   const quizzes = quizRepo.listForCourse(courseId).map((quiz) => {

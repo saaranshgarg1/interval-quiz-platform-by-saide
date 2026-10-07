@@ -36,6 +36,11 @@ apps/
 docs/
   lab5/               # user-tasks.md · user-flows.md (mermaid) · design-rationale.md
   lab6/               # implementation.md · debugging.md
+  lab7/               # testing.md · report.md (usability evaluation, P0/P1/P2)
+  lab8/               # improvements.md (Lab 7 fixes + regression suite)
+e2e/
+  lab8-regression.spec.ts  # Playwright/Chromium suite proving Lab 7 P0s are gone
+playwright.config.ts  # system-Chromium runner config
 lab5/
   prototype/          # clickable low-fi HTML prototype (index.html)
 ```
@@ -59,6 +64,8 @@ Other scripts:
 pnpm run build        # tsc (api) + tsc & vite build (web) -> apps/web/dist
 pnpm run start:web    # serve the built web app on :5174
 pnpm run typecheck    # tsc --noEmit for both workspaces
+pnpm test             # API suite (node:test) — 19 tests
+pnpm run test:e2e     # Playwright E2E regression in system Chromium (needs dev servers up)
 ```
 
 ### Demo accounts (seed data)
@@ -131,7 +138,31 @@ review flow can be demonstrated immediately.
 - **Lab 4: Define** — [`Literature_Proposal.pdf`](Literature_Proposal.pdf) (Literature review, problem statement, proposal gaps G1–G4).
 - **Lab 5: Design** — [`docs/lab5/user-tasks.md`](docs/lab5/user-tasks.md) · [`docs/lab5/user-flows.md`](docs/lab5/user-flows.md) · [`docs/lab5/design-rationale.md`](docs/lab5/design-rationale.md) · [`lab5/prototype/`](lab5/prototype/).
 - **Lab 6: Build** — [`docs/lab6/implementation.md`](docs/lab6/implementation.md) · [`docs/lab6/debugging.md`](docs/lab6/debugging.md).
-- **Lab 7: Test** — [`docs/lab7/testing.md`](docs/lab7/testing.md) (Automated test suite, concurrency and integrity verification).
-- **Lab 8: Improve** — [`docs/lab8/improvements.md`](docs/lab8/improvements.md) (LaTeX math formatting, question banks, student accommodations).
-- **Lab 9: Validate** — [`docs/lab9/validation.md`](docs/lab9/validation.md) (Nielsen heuristic evaluation, task completion benchmarks).
-- **Labs 10–12: Release** — [`docs/labs10-12/project-release.md`](docs/labs10-12/project-release.md) (Architecture overview, complete API specification, deployment guide).
+- **Lab 7: Test** — [`docs/lab7/testing.md`](docs/lab7/testing.md) (automated suite) · [`docs/lab7/report.md`](docs/lab7/report.md) (usability evaluation, P0/P1/P2 findings).
+- **Lab 8: Improve** — [`docs/lab8/improvements.md`](docs/lab8/improvements.md) (Lab 7 P0/P1 fixes, deeper defects found, Chromium E2E regression suite).
+
+---
+
+## Technologies used
+
+| Layer | Stack |
+|-------|-------|
+| **Language** | TypeScript (strict) across the whole monorepo |
+| **Monorepo** | pnpm workspaces (`apps/api`, `apps/web`) |
+| **Backend** | Node 24, Express, built-in `node:sqlite` (no native deps), scrypt password hashing + JWT (HMAC) sessions, RBAC guards, audit logging |
+| **Frontend** | React 18, Vite, React Router, Tailwind CSS v4 + shadcn/ui, @tanstack/react-query + react-table, react-hook-form + zod, framer-motion, sonner, lucide-react |
+| **Math/rich text** | In-app LaTeX rendering across editor, player, and results |
+| **Testing** | Node 24 native test runner (`node:test`) for the API; Playwright on system Chromium for E2E regression |
+| **Tooling** | tsc / tsx, ESLint, Docker + docker-compose for deployment |
+
+---
+
+## Team members
+
+| Name | Role |
+|------|------|
+| _Add your name_ | _e.g. Backend / API, RBAC_ |
+| _Add teammate_ | _e.g. Frontend / UI_ |
+| _Add teammate_ | _e.g. Testing & documentation_ |
+
+> Replace the placeholders above with the actual team roster and each member's contribution area.

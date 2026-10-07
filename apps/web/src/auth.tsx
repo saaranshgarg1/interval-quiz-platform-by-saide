@@ -1,10 +1,16 @@
-import { createContext, useContext, useCallback, useState, type ReactNode } from 'react';
+import { createContext, useContext, useCallback, useState, useEffect, type ReactNode } from 'react';
 import { api, getToken, setToken } from './api';
 import type { User } from './types';
 
 interface AuthState {
   user: User | null;
   token: string | null;
+  /**
+   * False until the initial session bootstrap resolves. Guards against
+   * redirecting a token-holding user to /login on a hard navigation or
+   * refresh before `refresh()` has had a chance to restore `user`.
+   */
+  ready: boolean;
   login: (email: string, password: string) => Promise<User>;
   register: (name: string, email: string, password: string, role: 'student' | 'instructor') => Promise<User>;
   sso: (idToken: string) => Promise<User>;
@@ -17,6 +23,8 @@ const AuthContext = createContext<AuthState | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setTok] = useState<string | null>(getToken());
+  // If there's no stored token there's nothing to restore, so we're ready immediately.
+  const [ready, setReady] = useState<boolean>(() => !getToken());
 
   const refresh = useCallback(async () => {
     const t = getToken();
@@ -30,6 +38,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null);
     }
   }, []);
+
+  // One-shot session bootstrap: restore the user from a stored token on mount,
+  // then flip `ready` so route guards can safely act on the resolved state.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      await refresh();
+      if (!cancelled) setReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refresh]);
 
   const login = useCallback(async (email: string, password: string) => {
     const res = await api.post<{ token: string; user: User }>('/auth/login', { email, password });
@@ -70,7 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, token, login, register, sso, logout, refresh }}>
+    <AuthContext.Provider value={{ user, token, ready, login, register, sso, logout, refresh }}>
       {children}
     </AuthContext.Provider>
   );
