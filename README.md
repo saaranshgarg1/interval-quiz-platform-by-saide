@@ -1,15 +1,11 @@
 # Interval ◇
 
 A from-scratch **quiz portal for the sAIDE website (IIT Ropar)** — designed and built as an HCI
-course project (Labs 5–6). Interval rethinks the existing graded/practice-assessment experience around four
+course project. Interval rethinks the existing graded/practice-assessment experience around four
 documented usability gaps, with every design decision traced back to a proposal gap (G1–G4) and, in the build,
 to working code.
 
-**Lab 5** (design) deliverables live in [`docs/lab5/`](docs/lab5/) + a clickable low-fidelity prototype in
-[`lab5/prototype/`](lab5/prototype/). **Lab 6** (build) notes and the debugging journal live in
-[`docs/lab6/`](docs/lab6/).
 
----
 
 ## What problems does it solve?
 
@@ -103,7 +99,6 @@ review flow can be demonstrated immediately.
 
 ---
 
-## Status: 100% Complete (Full Production Release)
 
 ### Core Capabilities & Deliverables
 - **Auth & Access Control**: Scrypt + JWT sessions, role enforcement (student, TA, instructor, admin), and campus sAIDE SSO / CAS integration.
@@ -161,8 +156,5 @@ review flow can be demonstrated immediately.
 
 | Name | Role |
 |------|------|
-| _Add your name_ | _e.g. Backend / API, RBAC_ |
-| _Add teammate_ | _e.g. Frontend / UI_ |
-| _Add teammate_ | _e.g. Testing & documentation_ |
-
-> Replace the placeholders above with the actual team roster and each member's contribution area.
+| Saaransh Garg | Backend / API, RBAC |
+| Shlok Vaidya | Frontend / UI |
