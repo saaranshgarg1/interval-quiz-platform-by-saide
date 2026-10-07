@@ -698,44 +698,58 @@ export function QuizEditorPage() {
                       <Label className="text-sm font-semibold mb-2 block">Edit Answer Key</Label>
                       {(q.qtype === 'single' || q.qtype === 'multiple') && (
                         <div className="space-y-2">
-                          {q.options.map((opt, idx) => (
-                            <label key={idx} className="flex items-center gap-2">
-                              <input
-                                type={q.qtype === 'single' ? 'radio' : 'checkbox'}
-                                name={`answer-${q.id}`}
-                                checked={
-                                  edit
-                                    ? q.qtype === 'single'
-                                      ? Number(edit.answer) === idx
-                                      : Array.isArray(edit.answer) && edit.answer.includes(idx)
-                                    : q.qtype === 'single'
-                                    ? Number(q.answer) === idx
-                                    : Array.isArray(q.answer) && q.answer.includes(idx)
-                                }
-                                onChange={() => {
-                                  if (q.qtype === 'single') {
-                                    setAnswerEdits({ ...answerEdits, [q.id]: { answer: idx } });
-                                  } else {
-                                    const curr = edit
-                                      ? Array.isArray(edit.answer)
-                                        ? [...edit.answer]
-                                        : []
-                                      : Array.isArray(q.answer)
-                                      ? [...q.answer]
-                                      : [];
-                                    const next = curr.includes(idx)
-                                      ? curr.filter((i) => i !== idx)
-                                      : [...curr, idx];
-                                    setAnswerEdits({ ...answerEdits, [q.id]: { answer: next } });
-                                  }
-                                }}
-                                className="accent-[var(--primary)]"
-                              />
-                              <span className="text-sm">
-                                <RichText content={opt} />
-                              </span>
-                            </label>
-                          ))}
+                          {q.options.map((opt, idx) => {
+                            const isChecked =
+                              edit
+                                ? q.qtype === 'single'
+                                  ? Number(edit.answer) === idx
+                                  : Array.isArray(edit.answer) && edit.answer.includes(idx)
+                                : q.qtype === 'single'
+                                ? Number(q.answer) === idx
+                                : Array.isArray(q.answer) && q.answer.includes(idx);
+                            return (
+                              <label
+                                key={idx}
+                                className={`flex cursor-pointer items-center gap-3 rounded-[var(--radius-md)] border px-3 py-2 text-sm transition-colors ${
+                                  isChecked
+                                    ? 'border-primary bg-primary/5'
+                                    : 'border-border hover:bg-accent/40'
+                                }`}
+                              >
+                                <input
+                                  type={q.qtype === 'single' ? 'radio' : 'checkbox'}
+                                  name={`answer-${q.id}`}
+                                  checked={isChecked}
+                                  onChange={() => {
+                                    if (q.qtype === 'single') {
+                                      setAnswerEdits({ ...answerEdits, [q.id]: { answer: idx } });
+                                    } else {
+                                      const curr = edit
+                                        ? Array.isArray(edit.answer)
+                                          ? [...edit.answer]
+                                          : []
+                                        : Array.isArray(q.answer)
+                                        ? [...q.answer]
+                                        : [];
+                                      const next = curr.includes(idx)
+                                        ? curr.filter((i) => i !== idx)
+                                        : [...curr, idx];
+                                      setAnswerEdits({ ...answerEdits, [q.id]: { answer: next } });
+                                    }
+                                  }}
+                                  className="size-4 shrink-0 accent-[var(--primary)]"
+                                />
+                                <span className="flex-1">
+                                  <RichText content={opt} />
+                                </span>
+                                {isChecked && (
+                                  <Badge variant="success" className="shrink-0">
+                                    Correct
+                                  </Badge>
+                                )}
+                              </label>
+                            );
+                          })}
                         </div>
                       )}
                       {q.qtype === 'numeric' && (

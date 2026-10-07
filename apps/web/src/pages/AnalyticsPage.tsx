@@ -320,6 +320,27 @@ export const AnalyticsPage: React.FC = () => {
     staleTime: 30_000,
   });
 
+  // Hooks must run unconditionally on every render — keep them above the
+  // early returns below. Tables tolerate an empty dataset while loading.
+  const [sorting, setSorting] = useState<SortingState>([
+    { id: 'submitted_at', desc: true },
+  ]);
+  const table = useReactTable({
+    data: analytics?.submissions ?? [],
+    columns: submissionColumns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    enableMultiSort: false,
+  });
+  const questionTable = useReactTable({
+    data: analytics?.question_analytics ?? [],
+    columns: questionColumns,
+    getCoreRowModel: getCoreRowModel(),
+    enableSorting: false,
+  });
+
   // ── CSV export (local, no shared deps) ──────────────────────────────
   const exportSubmissionsCsv = () => {
     if (!analytics?.submissions?.length) return;
@@ -430,28 +451,6 @@ export const AnalyticsPage: React.FC = () => {
       </Page>
     );
   }
-
-  // ── submissions table ────────────────────────────────────────────────
-  const [sorting, setSorting] = useState<SortingState>([
-    { id: 'submitted_at', desc: true },
-  ]);
-  const table = useReactTable({
-    data: analytics.submissions ?? [],
-    columns: submissionColumns,
-    state: { sorting },
-    onSortingChange: setSorting,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    enableMultiSort: false,
-  });
-
-  // ── question analytics table ─────────────────────────────────────────
-  const questionTable = useReactTable({
-    data: analytics.question_analytics ?? [],
-    columns: questionColumns,
-    getCoreRowModel: getCoreRowModel(),
-    enableSorting: false,
-  });
 
   return (
     <Page
