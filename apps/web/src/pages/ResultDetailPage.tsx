@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Check, X, Minus, KeyRound, AlertCircle, HelpCircle } from 'lucide-react';
+import { ArrowLeft, Check, X, Minus, KeyRound, AlertCircle, HelpCircle, Hourglass, Lightbulb, MessageSquare, Gavel, CircleDot } from 'lucide-react';
+import { AppealDialog, MyAppealsCard, useMyAppeals } from '../components/insights/StudentAppeals';
 import { useQuery } from '@tanstack/react-query';
 import { qk } from '../lib/queries';
 import { api, ApiError } from '../api';
@@ -20,10 +22,12 @@ interface ResultDetailResponse {
   result: ResultDetail;
 }
 
-function prettyAnswer(_qtype: string, v: unknown): string {
-  if (v == null) return '—';
-  if (typeof v === 'number') return String(v);
-  if (Array.isArray(v)) return v.length ? `[${v.join(', ')}]` : '—';
+function prettyAnswer(qtype: string, v: unknown): string {
+  if (v == null || v === '') return '—';
+  const letter = (i: unknown) => String.fromCharCode(65 + Number(i));
+  if (qtype === 'single') return letter(v);
+  if (qtype === 'multiple') return Array.isArray(v) && v.length ? v.map(letter).join(', ') : '—';
+  if (Array.isArray(v)) return v.length ? v.join(', ') : '—';
   return String(v);
 }
 
@@ -33,8 +37,14 @@ function questionStatus(q: ResultDetailType['per_question'][number]): {
   icon: React.ElementType;
   tone: 'success' | 'warning' | 'destructive' | 'secondary';
 } {
-  if (q.earned > 0) {
+  if (q.source === 'dropped') {
+    return { label: 'Dropped from the quiz', icon: Minus, tone: 'secondary' };
+  }
+  if (q.earned >= q.points && q.points > 0) {
     return { label: 'Correct', icon: Check, tone: 'success' };
+  }
+  if (q.earned > 0) {
+    return { label: 'Partly correct', icon: CircleDot, tone: 'warning' };
   }
   if (q.answered) {
     return { label: 'Incorrect', icon: X, tone: 'destructive' };
@@ -83,12 +93,35 @@ export function ResultDetailPage() {
   });
 
   const result = response?.result ?? null;
+  const [appealTarget, setAppealTarget] = useState<{ kind: 'grading' | 'integrity'; questionId?: number; label?: string } | null>(null);
+  const { data: myAppeals } = useMyAppeals(attemptIdNum);
+  const appealedQuestions = new Set((myAppeals?.appeals ?? []).filter((a) => a.status === 'open').map((a) => a.question_id));
 
   // ---- States: loading / error / empty ----
   if (isPending) {
     return (
       <Page title="Result" description="Loading your result…">
         <DetailSkeleton />
+      </Page>
+    );
+  }
+
+  if (isError && error instanceof ApiError && error.code === 'marking_pending') {
+    return (
+      <Page title="Result" description="Your written answers are being marked.">
+        <EmptyState
+          icon={Hourglass}
+          title="Marking in progress"
+          description={error.message}
+          action={
+            <Button asChild variant="secondary" size="sm">
+              <Link to="/results">
+                <ArrowLeft />
+                All results
+              </Link>
+            </Button>
+          }
+        />
       </Page>
     );
   }
@@ -270,17 +303,59 @@ export function ResultDetailPage() {
                         {prettyAnswer(q.qtype, q.your_answer)}
                       </p>
                     </div>
-                    {keyReleased && q.correct_answer != null && (
+                    {keyReleased && q.correct_answer != null && q.correct_answer !== '' && (
                       <div>
                         <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                          Correct answer
+                          {q.qtype === 'descriptive' ? 'Model answer' : 'Correct answer'}
                         </p>
-                        <p className="mt-1 font-mono text-sm break-words">
+                        <p className="mt-1 whitespace-pre-wrap text-sm break-words">
                           {prettyAnswer(q.qtype, q.correct_answer)}
+                          {(q.accept_also ?? []).length > 0 && (
+                            <span className="text-muted-foreground">
+                              {' '}· also accepted: {(q.accept_also ?? []).map((a) => prettyAnswer(q.qtype, a)).join('; ')}
+                            </span>
+                          )}
                         </p>
                       </div>
                     )}
                   </div>
+                  {q.assumption && (
+                    <p className="flex items-start gap-2 rounded-[var(--radius-md)] border border-dashed px-3 py-2 text-sm">
+                      <Lightbulb className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+                      <span>
+                        <span className="text-muted-foreground">You assumed: </span>
+                        {q.assumption}
+                      </span>
+                    </p>
+                  )}
+                  {q.feedback && (
+                    <p className="flex items-start gap-2 rounded-[var(--radius-md)] bg-primary/5 px-3 py-2 text-sm">
+                      <MessageSquare className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+                      <span>
+                        <span className="text-muted-foreground">Instructor feedback: </span>
+                        {q.feedback}
+                      </span>
+                    </p>
+                  )}
+                  {(q.grading_mode === 'full_marks' || q.grading_mode === 'dropped' || (q.bonus ?? 0) > 0) && (
+                    <p className="text-sm text-muted-foreground">
+                      {q.grading_mode === 'full_marks' && 'This question was regraded: everyone received full marks.'}
+                      {q.grading_mode === 'dropped' && 'This question was removed from the quiz and does not count.'}
+                      {(q.bonus ?? 0) > 0 &&
+                        ` Includes a fairness adjustment of +${q.bonus} because your version of this random question turned out harder than others.`}
+                    </p>
+                  )}
+                  {q.grading_mode !== 'dropped' && q.earned < q.points && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={appealedQuestions.has(q.question_id)}
+                      onClick={() => setAppealTarget({ kind: 'grading', questionId: q.question_id, label: `Q${i + 1}` })}
+                    >
+                      <Gavel aria-hidden="true" />
+                      {appealedQuestions.has(q.question_id) ? 'Appeal sent' : 'Appeal this mark'}
+                    </Button>
+                  )}
                   {q.options.length > 0 && (
                     <ol className="flex flex-col gap-1.5">
                       {q.options.map((o, optIdx) => (
@@ -305,13 +380,22 @@ export function ResultDetailPage() {
           })}
         </div>
 
+        <MyAppealsCard
+          attemptId={result.attempt_id}
+          labels={Object.fromEntries(result.per_question.map((q, i) => [q.question_id, `Q${i + 1}`]))}
+        />
+        <AppealDialog attemptId={result.attempt_id} target={appealTarget} onClose={() => setAppealTarget(null)} />
+
         {/* Back action */}
-        <div>
+        <div className="flex flex-wrap items-center gap-3">
           <Button asChild variant="secondary">
             <Link to="/results">
               <ArrowLeft />
               All results
             </Link>
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setAppealTarget({ kind: 'integrity' })}>
+            Disagree with a flag or lock on this attempt?
           </Button>
         </div>
       </div>

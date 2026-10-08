@@ -51,6 +51,9 @@ import { toast } from '../components/ui/sonner';
 import { formatMs } from '../components/exam/ExamScreens';
 import { ConfirmAction } from '../components/ConfirmAction';
 import { FlagLevelBadge, FlagsPanel, RaiseFlagDialog } from '../components/exam/FlagsPanel';
+import { HandsPanel, QuestionHealthPanel, useHands } from '../components/exam/LivePanels';
+import { AttemptTimeline } from '../components/exam/AttemptTimeline';
+import { Hand as HandIcon, ListChecks } from 'lucide-react';
 
 /**
  * Live exam monitor (instructor & TA). Polls a whole-class snapshot every few
@@ -159,7 +162,7 @@ export function MonitorPage() {
   const [action, setAction] = useState<{ kind: AttemptActionKind; row: MonitorRow } | null>(null);
   const [timelineFor, setTimelineFor] = useState<number | null>(null);
   const [confirmEnd, setConfirmEnd] = useState(false);
-  const [view, setView] = useState<'students' | 'flags'>('students');
+  const [view, setView] = useState<'students' | 'flags' | 'hands' | 'questions'>('students');
   const [flagTarget, setFlagTarget] = useState<{ attemptId: number; name: string } | null>(null);
   const [events, setEvents] = useState<MonitorEvent[]>([]);
   const lastEventId = useRef(0);
@@ -197,6 +200,25 @@ export function MonitorPage() {
       clearInterval(t);
     };
   }, [qid, paused]);
+
+  // Raised hands: badge count, and a toast when a new one arrives.
+  const { data: handsData } = useHands(qid);
+  const openHands = handsData?.open ?? 0;
+  const seenHands = useRef<number | null>(null);
+  useEffect(() => {
+    if (!handsData) return;
+    const newest = handsData.hands.reduce((m, h) => Math.max(m, h.id), 0);
+    if (seenHands.current !== null && newest > seenHands.current) {
+      const h = handsData.hands.find((x) => x.id === newest);
+      if (h?.status === 'open') {
+        toast.info(`${h.student_name} raised a hand${h.question_label ? ` about ${h.question_label}` : ''}`, {
+          description: h.message,
+          action: { label: 'Open', onClick: () => setView('hands') },
+        });
+      }
+    }
+    seenHands.current = newest;
+  }, [handsData]);
 
   // Local 1 s tick so time-left counts down between polls.
   useEffect(() => {
@@ -365,8 +387,19 @@ export function MonitorPage() {
             <Button role="tab" aria-selected={view === 'flags'} size="sm" variant={view === 'flags' ? 'default' : 'secondary'} onClick={() => setView('flags')}>
               <ShieldAlert aria-hidden="true" /> Flagged candidates ({summary.flagged})
             </Button>
+            <Button role="tab" aria-selected={view === 'hands'} size="sm" variant={view === 'hands' ? 'default' : 'secondary'} onClick={() => setView('hands')}>
+              <HandIcon aria-hidden="true" /> Raised hands
+              {openHands > 0 && <Badge variant="warning" className="ml-1">{openHands}</Badge>}
+            </Button>
+            <Button role="tab" aria-selected={view === 'questions'} size="sm" variant={view === 'questions' ? 'default' : 'secondary'} onClick={() => setView('questions')}>
+              <ListChecks aria-hidden="true" /> Question health
+            </Button>
           </div>
-          {view === 'flags' ? (
+          {view === 'hands' ? (
+            <HandsPanel quizId={qid} />
+          ) : view === 'questions' ? (
+            <QuestionHealthPanel quizId={qid} />
+          ) : view === 'flags' ? (
             <FlagsPanel
               quizId={qid}
               isInstructor={isInstructor}
@@ -1075,19 +1108,7 @@ function TimelineDialog({ attemptId, onClose }: { attemptId: number | null; onCl
         {isLoading || !data ? (
           <LoadingSkeleton rows={4} variant="text" />
         ) : (
-          <ol className="space-y-1.5 text-sm">
-            {data.events.map((e) => (
-              <li key={e.id} className="grid grid-cols-[80px_1fr] gap-2 border-b pb-1.5 last:border-0">
-                <time className="font-mono text-xs text-muted-foreground">
-                  {new Date(`${e.recorded_at.replace(' ', 'T')}Z`).toLocaleTimeString()}
-                </time>
-                <span>
-                  <code className="mr-1.5 rounded bg-muted px-1 text-xs">{e.kind}</code>
-                  {e.detail}
-                </span>
-              </li>
-            ))}
-          </ol>
+          <AttemptTimeline audit={data} />
         )}
         <DialogFooter>
           {data && (

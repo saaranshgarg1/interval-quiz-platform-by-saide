@@ -43,8 +43,19 @@ Interval runs proctored exams for a whole class simultaneously. Full guide:
   overview for staff and an *Exam schedule* for students.
 * **Integrity of the record**: one active window per attempt, append-only answer history, audit log, receipts,
   gradebook CSV with entry numbers, absentees, per-question marks and flag columns.
+* **Written answers & assumptions**: descriptive questions marked by hand (scores stay hidden until marked);
+  any question can let students state an assumption, which the marker sees.
+* **After the exam, on demand**: a statistical **cheating check** (rare shared wrong answers, corrected for the
+  number of pairs, plus near-identical written answers), **fairness check & normalization** of random questions
+  with a comparison chart, **regrading** (accept another answer, change key, full marks, drop), **difficulty
+  re-rating** suggestions for bank questions, **appeals**, and a per-attempt **timeline**.
+* **During the exam**: students **raise a hand**; staff reply privately or pin a clarification to that question;
+  **question health** warns about questions that look broken.
+* **Accessibility profiles**: text size, contrast, spacing, readable font, reduced motion — set by the student
+  (outside exams) or an admin, who can also grant account-wide extra time.
 * **Scale**: 500 students — 0 errors, saves 2 ms p50 / 15 ms p99 — measured by the bundled load test
-  ([results](docs/loadtest/results-500-students.json)).
+  ([results](docs/loadtest/results-500-students.json)); 1000 students across 10 simultaneous quizzes used about
+  a quarter of one CPU core ([results](docs/loadtest/results-1000-students-10-quizzes.json)).
 
 ---
 
@@ -106,6 +117,10 @@ pnpm --filter @interval/api backup     # online database backup (safe during an 
 
 The HCI checkpoint quiz is a monitored exam with access code **`HCI-2026`**; CS305 also has a timed, one-way,
 full-screen quiz so two exams can be demonstrated live at the same time.
+
+**"Mid-sem — HCI Principles (graded demo)"** in AI511 is already finished by all 8 students, for the post-exam
+tools: 6 written answers to mark, assumptions on Q5, a wrongly keyed Q2 to regrade, a random question with three
+variants, and two students (Kabir Singh, Dev Joshi) who copied. Open it from the course page → Analytics.
 
 Two courses are seeded (`AI511` HCI, `CS305` DB), the HCI course already contains a **published** quiz
 ("HCI Basics – Checkpoint Quiz 1", strict policy) and a couple of locked/expired attempts so the incident

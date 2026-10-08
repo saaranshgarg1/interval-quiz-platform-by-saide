@@ -12,7 +12,7 @@ import {
 } from './repo.js';
 import { hashPassword } from './auth.js';
 import { shuffle, nowUtc, addMinutes } from './util.js';
-import { finalize } from './services/attempts.js';
+import { finalize, startAttempt, getAttemptForStudent, saveAnswers, submitAttempt } from './services/attempts.js';
 import { applyPreset, defaultSettings, normalizeSettings } from './services/exam-settings.js';
 
 console.log('[seed] seeding Interval demo data…');
@@ -280,6 +280,94 @@ if (ai511Checkpoint && attemptRepo.usedAttempts(rohan.id, ai511Checkpoint.vid) =
   const attId = attemptRepo.create(ai511Checkpoint.vid, rohan.id, JSON.stringify(order), seed, addMinutes(10));
   const first = qs[0];
   if (first) answerRepo.save(attId, first.id, order.indexOf(first.id), '1', 1);
+}
+
+// A finished, graded exam to try the post-exam tools on (Results → Marking,
+// Questions & regrade, Random fairness, Cheating check): a written question
+// and assumption boxes, one random bank question per student, a question whose
+// key was entered wrongly (B is right), and two students who copied.
+const gradedDemo = db
+  .prepare("SELECT COUNT(*) AS n FROM quiz_versions WHERE course_id = ? AND title LIKE 'Mid-sem%'")
+  .get(ai511Id) as { n: number };
+const pool = db
+  .prepare("SELECT id FROM question_banks WHERE course_id = ? AND name = 'HCI question pool'")
+  .get(ai511Id) as { id: number } | undefined;
+if (!Number(gradedDemo.n) && pool) {
+  const quizId = quizRepo.create(ai511Id, shlok.id);
+  const vId = quizVersionRepo.createDraft(quizId, ai511Id, shlok.id, 1);
+  quizVersionRepo.updateMeta(vId, {
+    title: 'Mid-sem — HCI Principles (graded demo)',
+    instructions: 'Finished exam with submissions, for trying marking, regrading, fairness and the cheating check.',
+    duration_minutes: 45,
+    shuffle_questions: 0,
+    shuffle_options: 0,
+    attempts_allowed: 1,
+    show_scores: 'release',
+    exam_settings: JSON.stringify(applyPreset(defaultSettings(), 'standard')),
+  });
+  const q = (input: Parameters<typeof questionRepo.create>[1]) => questionRepo.create(vId, input).id;
+  const q1 = q({ qtype: 'single', text: 'How many usability heuristics did Nielsen publish in 1994?', options: ['8', '10', '12', '15'], answer: 1, points: 1 });
+  const q2 = q({
+    qtype: 'single',
+    text: 'Which law predicts the time to point at a target?',
+    options: ['Hick’s law', 'Fitts’s law', 'Moore’s law', 'Miller’s law'],
+    answer: 0, // deliberately wrong key: regrade it to B
+    points: 1,
+  });
+  const q3 = q({
+    qtype: 'multiple',
+    text: 'Which evaluation methods need no real users?',
+    options: ['Heuristic evaluation', 'Cognitive walkthrough', 'Think-aloud study', 'A/B test'],
+    answer: [0, 1],
+    points: 2,
+  });
+  const q4 = q({ qtype: 'single', text: 'Miller’s “magical number” for short-term memory is…', options: ['3 ± 1', '5 ± 2', '7 ± 2', '9 ± 2'], answer: 2, points: 1 });
+  const q5 = q({
+    qtype: 'numeric',
+    text: 'Fitts’s index of difficulty log₂(D/W + 1) for a target 8 cm away and 2 cm wide (2 decimals)?',
+    answer: 2.32,
+    tolerance: 0.05,
+    points: 2,
+    allow_assumptions: true,
+  });
+  const q6 = q({ qtype: 'single', text: 'Which of these is a Gestalt principle?', options: ['Proximity', 'Affordance', 'Latency', 'Recall'], answer: 0, points: 1 });
+  slotRepo.create(vId, { bank_id: pool.id, difficulty: 'medium', tag: null, points: 2, time_limit_seconds: null });
+  const q8 = q({
+    qtype: 'descriptive',
+    text: 'Explain why recognition is easier than recall, and give one interface example of each.',
+    answer: '2 marks: recognition gives cues / recall needs retrieval without cues. 1 mark each: a recognition example (menu) and a recall example (command line). 1 mark: clarity.',
+    points: 5,
+    allow_assumptions: true,
+  });
+  quizVersionRepo.publish(vId);
+
+  const copied = 'Recognition is easier because the interface shows you the options so you only have to spot the right one while recall means you must remember it with no cues at all. A menu bar is recognition and typing a terminal command is recall.';
+  const sheets: { student: number; answers: Record<number, unknown>; assumptions?: Record<number, string> }[] = [
+    { student: 0, answers: { [q1]: 1, [q2]: 1, [q3]: [0, 1], [q4]: 2, [q5]: 2.32, [q6]: 0, [q8]: 'Recall requires retrieving information from memory without help, whereas recognition only needs us to match what we see against memory. Menus and toolbars support recognition; a command line like bash relies on recall.' } },
+    { student: 1, answers: { [q1]: 1, [q2]: 1, [q3]: [0], [q4]: 2, [q5]: 2.3, [q6]: 0, [q8]: 'Because seeing something triggers memory. Example: icons (recognition) vs passwords (recall).' }, assumptions: { [q5]: 'Rounded to one decimal place first.' } },
+    { student: 2, answers: { [q1]: 2, [q2]: 1, [q3]: [0, 1], [q4]: 1, [q5]: 2, [q6]: 0, [q8]: 'Recognition uses cues from the screen.' }, assumptions: { [q5]: 'I assumed D is measured to the near edge of the target, so D = 7 and W = 2.' } },
+    { student: 3, answers: { [q1]: 3, [q2]: 1, [q3]: [2, 3], [q4]: 0, [q5]: 9.99, [q6]: 3, [q8]: copied } },
+    { student: 4, answers: { [q1]: 1, [q2]: 0, [q3]: [0, 1], [q4]: 2, [q5]: 2.32, [q6]: 0, [q8]: '' } },
+    { student: 5, answers: { [q1]: 3, [q2]: 1, [q3]: [2, 3], [q4]: 0, [q5]: 9.99, [q6]: 3, [q8]: `${copied}` } },
+    { student: 6, answers: { [q1]: 0, [q2]: 1, [q3]: [0, 2], [q4]: 2, [q5]: 1.58, [q6]: 1, [q8]: 'Recall is harder since nothing on screen helps you. Autocomplete turns recall into recognition.' } },
+    { student: 7, answers: { [q1]: 1, [q2]: 1, [q3]: [1], [q4]: 3, [q5]: 2.32, [q6]: 0 } },
+  ];
+  for (const sheet of sheets) {
+    const s = students[sheet.student]!;
+    const started = startAttempt(s.id, vId);
+    const view = getAttemptForStudent(s.id, started.attempt.id);
+    const drawn = view.questions.find((x) => questionRepo.get(x.id)?.slot_id);
+    const items = Object.entries(sheet.answers).map(([qid, answer]) => ({
+      question_id: Number(qid),
+      answer,
+      revision: 1,
+      assumption: sheet.assumptions?.[Number(qid)],
+    }));
+    // Random question: most get it right, two do not.
+    if (drawn) items.push({ question_id: drawn.id, answer: sheet.student % 4 === 2 ? 1 : 0, revision: 1, assumption: undefined });
+    saveAnswers(s.id, started.attempt.id, { answers: items });
+    submitAttempt(s.id, started.attempt.id);
+  }
 }
 
 console.log('[seed] done. Demo accounts:');

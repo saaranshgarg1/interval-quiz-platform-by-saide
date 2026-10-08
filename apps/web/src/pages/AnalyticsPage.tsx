@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3,
   ClipboardList,
@@ -10,7 +11,19 @@ import {
   Clock,
   Lock,
   AlertCircle,
+  ListChecks,
+  PenLine,
+  ShieldQuestion,
+  Shuffle,
 } from 'lucide-react';
+import { api } from '../api';
+import type { AppealWithContext, GradingQueue } from '../types';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { MarkingPanel } from '../components/insights/MarkingPanel';
+import { QuestionsPanel } from '../components/insights/QuestionsPanel';
+import { FairnessPanel } from '../components/insights/FairnessPanel';
+import { CollusionPanel } from '../components/insights/CollusionPanel';
+import { AppealsPanel } from '../components/insights/AppealsPanel';
 import { useAnalytics } from '../lib/queries';
 import { downloadFile } from '../api';
 import { toast } from '@/components/ui/sonner';
@@ -327,6 +340,36 @@ export const AnalyticsPage: React.FC = () => {
   const { data: analytics, error, isError, isLoading, refetch } = useAnalytics(vId, {
     staleTime: 30_000,
   });
+  const qc = useQueryClient();
+  const [params, setParams] = useSearchParams();
+  const tab = params.get('tab') ?? 'overview';
+  const setTab = (t: string) =>
+    setParams(
+      (p) => {
+        if (t === 'overview') p.delete('tab');
+        else p.set('tab', t);
+        return p;
+      },
+      { replace: true },
+    );
+  // Badge counts on the tabs share the panels' cache entries.
+  const { data: grading } = useQuery({
+    queryKey: ['insights', 'grading', vId],
+    queryFn: () => api.get<GradingQueue>(`/insights/version/${vId}/grading`),
+    enabled: Number.isFinite(vId),
+  });
+  const { data: appeals } = useQuery({
+    queryKey: ['insights', 'appeals', vId],
+    queryFn: () => api.get<{ appeals: AppealWithContext[]; open: number }>(`/insights/version/${vId}/appeals`),
+    enabled: Number.isFinite(vId),
+  });
+  const pendingMarks = grading?.pending ?? 0;
+  const openAppeals = appeals?.open ?? 0;
+  /** Marks, regrades and normalization change scores: refresh the overview numbers too. */
+  const refreshAll = () => {
+    void refetch();
+    void qc.invalidateQueries({ queryKey: ['insights'] });
+  };
 
   // Hooks must run unconditionally on every render — keep them above the
   // early returns below. Tables tolerate an empty dataset while loading.
@@ -471,6 +514,71 @@ export const AnalyticsPage: React.FC = () => {
       }
       width="wide"
     >
+      <Tabs value={tab} onValueChange={setTab}>
+        <div className="overflow-x-auto">
+          <TabsList>
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="marking">
+              Marking{pendingMarks > 0 && <Badge variant="warning" className="ml-1.5">{pendingMarks}</Badge>}
+            </TabsTrigger>
+            <TabsTrigger value="questions">Questions &amp; regrade</TabsTrigger>
+            <TabsTrigger value="fairness">Random fairness</TabsTrigger>
+            <TabsTrigger value="integrity">Cheating check</TabsTrigger>
+            <TabsTrigger value="appeals">
+              Appeals{openAppeals > 0 && <Badge variant="warning" className="ml-1.5">{openAppeals}</Badge>}
+            </TabsTrigger>
+          </TabsList>
+        </div>
+
+        <TabsContent value="overview">
+      {analytics.submitted_count + analytics.expired_count > 0 && (
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle>After the exam — what would you like to do?</CardTitle>
+            <CardDescription>Each of these runs only when you choose it. Scores update everywhere when you change marks.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              {
+                id: 'integrity',
+                icon: ShieldQuestion,
+                title: 'Detect cheating',
+                text: 'Find pairs who share unusual wrong answers or near-identical written answers.',
+              },
+              {
+                id: 'fairness',
+                icon: Shuffle,
+                title: 'Normalize random questions',
+                text: 'Compare the bank questions students drew and even out a harder one.',
+              },
+              {
+                id: 'marking',
+                icon: PenLine,
+                title: pendingMarks > 0 ? `Mark ${pendingMarks} written answer(s)` : 'Review written answers',
+                text: 'Descriptive answers and stated assumptions, marked by hand.',
+              },
+              {
+                id: 'questions',
+                icon: ListChecks,
+                title: 'Fix a question',
+                text: 'Regrade a broken question and re-rate bank difficulty from the results.',
+              },
+            ].map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => setTab(c.id)}
+                className="rounded-[var(--radius-lg)] border p-4 text-left transition-colors hover:border-primary hover:bg-primary/5"
+              >
+                <c.icon className="size-5 text-primary" aria-hidden="true" />
+                <span className="mt-2 block font-medium">{c.title}</span>
+                <span className="mt-1 block text-sm text-muted-foreground">{c.text}</span>
+              </button>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {/* ── Summary stat cards ── */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
@@ -621,6 +729,24 @@ export const AnalyticsPage: React.FC = () => {
           )}
         </CardContent>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="marking">
+          <MarkingPanel versionId={analytics.quiz_version_id} onChanged={refreshAll} />
+        </TabsContent>
+        <TabsContent value="questions">
+          <QuestionsPanel versionId={analytics.quiz_version_id} onChanged={refreshAll} />
+        </TabsContent>
+        <TabsContent value="fairness">
+          <FairnessPanel versionId={analytics.quiz_version_id} onChanged={refreshAll} />
+        </TabsContent>
+        <TabsContent value="integrity">
+          <CollusionPanel versionId={analytics.quiz_version_id} />
+        </TabsContent>
+        <TabsContent value="appeals">
+          <AppealsPanel versionId={analytics.quiz_version_id} onChanged={refreshAll} />
+        </TabsContent>
+      </Tabs>
     </Page>
   );
 };

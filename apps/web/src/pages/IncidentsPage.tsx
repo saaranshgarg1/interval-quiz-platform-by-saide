@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQueryClient, useQueries } from '@tanstack/react-query';
+import { AttemptTimeline } from '../components/exam/AttemptTimeline';
 import {
   ColumnDef,
   flexRender,
@@ -433,6 +434,13 @@ function AuditPanel({ audit, onDecide }: AuditPanelProps) {
       </p>
 
       <section>
+        <h4 className="mb-2 font-display text-sm font-semibold text-foreground">Timeline</h4>
+        <AttemptTimeline audit={audit} />
+      </section>
+
+      <details>
+        <summary className="cursor-pointer font-display text-sm font-semibold text-foreground">Raw event log ({events.length})</summary>
+      <section>
         <h4 className="font-display text-sm font-semibold text-foreground">Recorded events ({events.length})</h4>
         {events.length === 0 ? (
           <p className="mt-1.5 text-sm text-muted-foreground">No policy events recorded.</p>
@@ -461,6 +469,8 @@ function AuditPanel({ audit, onDecide }: AuditPanelProps) {
           </div>
         )}
       </section>
+
+      </details>
 
       <section>
         <h4 className="font-display text-sm font-semibold text-foreground">Saved answers ({answers.length})</h4>

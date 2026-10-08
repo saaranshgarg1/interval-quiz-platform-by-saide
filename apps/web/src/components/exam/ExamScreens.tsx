@@ -398,7 +398,7 @@ export function FinishedScreen({
           Score: {meta.score}/{meta.max_score}
         </Badge>
       ) : (
-        <p className="text-xs text-muted-foreground">Your score appears once your instructor releases results.</p>
+        <p className="text-xs text-muted-foreground">Your score appears once your instructor has marked any written answers and released results.</p>
       )}
     </CenteredCard>
   );

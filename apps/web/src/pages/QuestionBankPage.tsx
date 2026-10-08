@@ -58,6 +58,7 @@ const questionBase = {
   points: z.coerce.number().min(0.5, 'Must be at least 0.5').max(100),
   tags: z.string().optional(),
   difficulty: z.enum(['easy', 'medium', 'hard']),
+  allow_assumptions: z.boolean().optional(),
 };
 
 export const DIFFICULTY_LABEL: Record<Difficulty, string> = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
@@ -87,10 +88,20 @@ const numericSchema = z.object({
   options: z.any().optional(),
 });
 
+/** Marked by hand: the answer is an optional marking guide. */
+const descriptiveSchema = z.object({
+  ...questionBase,
+  qtype: z.enum(['descriptive']),
+  answer: z.string().max(20000).optional(),
+  options: z.any().optional(),
+  tolerance: z.any().optional(),
+});
+
 const questionSchema = z.discriminatedUnion('qtype', [
   singleMultipleSchema,
   shortSchema,
   numericSchema,
+  descriptiveSchema,
 ]);
 
 type NewBankForm = z.infer<typeof newBankSchema>;
@@ -273,6 +284,7 @@ function NewQuestionForm({
       tolerance: 0.01,
       tags: '',
       difficulty: 'medium',
+      allow_assumptions: false,
     },
   });
 
@@ -317,6 +329,7 @@ function NewQuestionForm({
         tolerance: qtype === 'numeric' ? data.tolerance : null,
         points: data.points,
         difficulty: data.difficulty,
+        allow_assumptions: Boolean(data.allow_assumptions),
         tags: data.tags
           ? data.tags
               .split(',')
@@ -361,6 +374,7 @@ function NewQuestionForm({
                 <option value="multiple">Multiple Choice (Checkboxes)</option>
                 <option value="numeric">Numeric (Math / Range)</option>
                 <option value="short">Short Answer</option>
+                <option value="descriptive">Descriptive (marked by hand)</option>
               </select>
             </div>
             <div>
@@ -451,6 +465,21 @@ function NewQuestionForm({
             </div>
           )}
 
+          {qtype === 'descriptive' && (
+            <div>
+              <Label htmlFor="answer-guide">Model answer / marking guide (optional)</Label>
+              <Textarea
+                id="answer-guide"
+                rows={3}
+                placeholder="What a full-marks answer contains"
+                {...register('answer')}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Never auto-graded — the instructor marks each answer after the exam.
+              </p>
+            </div>
+          )}
+
           {qtype === 'short' && (
             <div>
               <Label htmlFor="answer-short">Correct Answer (String)</Label>
@@ -481,6 +510,12 @@ function NewQuestionForm({
             Quizzes can draw a random question of a given difficulty (and tag) from this bank, so each student gets a
             different question of the same level.
           </p>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" {...register('allow_assumptions')} className="mt-1 accent-[var(--primary)]" style={{ width: 'auto' }} />
+            <span>
+              <strong>Allow assumptions</strong> — students can write down an assumption next to their answer.
+            </span>
+          </label>
 
           <DialogFooter>
             <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>
@@ -665,6 +700,7 @@ function QuestionsTable({ questions, onDelete }: QuestionsTableProps) {
             <option value="multiple">Multiple Choice</option>
             <option value="short">Short Answer</option>
             <option value="numeric">Numeric</option>
+            <option value="descriptive">Descriptive</option>
           </select>
           <select
             value={difficultyFilter}

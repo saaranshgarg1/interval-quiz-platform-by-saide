@@ -391,9 +391,13 @@ export interface Audit {
     last_seen_at: string | null;
   };
   student: User | null;
-  answers: { question_id: number; position: number; answer: unknown; revision: number; saved_at: string; status: string }[];
-  history: { question_id: number; answer: unknown; revision: number; saved_at: string }[];
+  answers: { question_id: number; position: number; answer: unknown; revision: number; saved_at: string; status: string; assumption?: string | null }[];
+  history: { question_id: number; answer: unknown; revision: number; saved_at: string; assumption?: string | null }[];
   flags?: ManualFlag[];
+  hands?: (Hand & { attempt_id: number })[];
+  appeals?: Appeal[];
+  /** question id → paper label ("Q3", "Q5·B") */
+  labels?: Record<string, string>;
   events: { id: number; attempt_id: number; kind: string; detail: string | null; recorded_at: string; source: string }[];
   decisions: { id: number; attempt_id: number; decided_by: number; decision: string; reason: string | null; created_at: string; decided_by_name: string; decided_by_email: string }[];
 }

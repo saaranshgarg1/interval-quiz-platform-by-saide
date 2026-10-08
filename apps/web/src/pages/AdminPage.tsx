@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { DatabaseBackup, LogOut, Search, ShieldCheck, Users } from 'lucide-react';
+import { Accessibility, DatabaseBackup, LogOut, Search, ShieldCheck, Users } from 'lucide-react';
 import { api, ApiError } from '../api';
 import { useAuth } from '../auth';
-import type { Role } from '../types';
+import type { AccessibilityPrefs, Role } from '../types';
+import { AccessibilityFields, DEFAULT_PREFS } from '../components/AccessibilityMenu';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Page, EmptyState, ErrorState, LoadingSkeleton } from '../components/primitives';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -28,6 +30,22 @@ interface AdminUser {
   role: Role;
   entry_number: string | null;
   created_at: string;
+  time_multiplier: number;
+  accessibility: AccessibilityPrefs;
+}
+
+/** Shorthand shown in the table, e.g. "+50% time · large text". */
+function profileSummary(u: AdminUser): string[] {
+  const p = u.accessibility ?? DEFAULT_PREFS;
+  const out: string[] = [];
+  if (u.time_multiplier > 1) out.push(`+${Math.round((u.time_multiplier - 1) * 100)}% time`);
+  if (p.text_size !== 'normal') out.push(p.text_size === 'large' ? 'large text' : 'extra-large text');
+  if (p.contrast === 'high') out.push('high contrast');
+  if (p.dyslexia_font) out.push('readable font');
+  if (p.line_spacing === 'relaxed') out.push('relaxed spacing');
+  if (p.reduce_motion) out.push('reduced motion');
+  if (p.underline_links) out.push('underlined links');
+  return out;
 }
 
 const ROLE_TEXT: Record<Role, string> = {
@@ -54,6 +72,28 @@ export function AdminPage() {
   const [roleFilter, setRoleFilter] = useState<'all' | Role>('all');
   const [pendingRole, setPendingRole] = useState<{ user: AdminUser; role: Role } | null>(null);
   const [entryEdits, setEntryEdits] = useState<Record<number, string>>({});
+  const [a11yUser, setA11yUser] = useState<AdminUser | null>(null);
+  const [a11yDraft, setA11yDraft] = useState<{ prefs: AccessibilityPrefs; time: string }>({ prefs: DEFAULT_PREFS, time: '1' });
+
+  const openA11y = (u: AdminUser) => {
+    setA11yUser(u);
+    setA11yDraft({ prefs: u.accessibility ?? DEFAULT_PREFS, time: String(u.time_multiplier ?? 1) });
+  };
+
+  const saveA11y = async () => {
+    if (!a11yUser) return;
+    try {
+      await api.put(`/admin/users/${a11yUser.id}/accessibility`, {
+        prefs: a11yDraft.prefs,
+        time_multiplier: Number(a11yDraft.time),
+      });
+      toast.success(`Accessibility profile saved for ${a11yUser.name}.`);
+      setA11yUser(null);
+      void refresh();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not save the profile.');
+    }
+  };
 
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['admin', 'users'],
@@ -171,6 +211,7 @@ export function AdminPage() {
                 <th className="px-3 py-2 font-medium">User</th>
                 <th className="px-3 py-2 font-medium">Entry number</th>
                 <th className="px-3 py-2 font-medium">Role</th>
+                <th className="px-3 py-2 font-medium">Accessibility</th>
                 <th className="px-3 py-2 font-medium">Joined</th>
                 <th className="px-3 py-2" />
               </tr>
@@ -217,6 +258,26 @@ export function AdminPage() {
                         <option value="admin">Admin</option>
                       </select>
                     </td>
+                    <td className="px-3 py-2">
+                      <button
+                        type="button"
+                        onClick={() => openA11y(u)}
+                        className="flex max-w-56 flex-wrap items-center gap-1 rounded-[var(--radius-md)] px-1 py-0.5 text-left hover:bg-muted"
+                        aria-label={`Accessibility profile for ${u.name}`}
+                      >
+                        {profileSummary(u).length === 0 ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                            <Accessibility className="size-3.5" aria-hidden="true" /> Set up
+                          </span>
+                        ) : (
+                          profileSummary(u).map((t) => (
+                            <Badge key={t} variant={t.includes('time') ? 'warning' : 'secondary'}>
+                              {t}
+                            </Badge>
+                          ))
+                        )}
+                      </button>
+                    </td>
                     <td className="px-3 py-2 text-xs text-muted-foreground">
                       {new Date(`${u.created_at.replace(' ', 'T')}Z`).toLocaleDateString()}
                     </td>
@@ -240,6 +301,46 @@ export function AdminPage() {
           </table>
         </div>
       )}
+
+      <Dialog open={a11yUser !== null} onOpenChange={(o) => !o && setA11yUser(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Accessibility profile — {a11yUser?.name}</DialogTitle>
+            <DialogDescription>
+              Applies to every page and every quiz this person opens. They can change the display settings themselves
+              outside a quiz; extra time can only be granted here.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <label htmlFor="a11y-time" className="text-sm font-medium">
+              Extra time on every timed quiz
+            </label>
+            <select
+              id="a11y-time"
+              value={a11yDraft.time}
+              onChange={(e) => setA11yDraft((d) => ({ ...d, time: e.target.value }))}
+              className="w-full rounded-[var(--radius-md)] border border-[var(--line-strong)] bg-card px-3 py-2 text-sm"
+            >
+              {['1', '1.25', '1.33', '1.5', '2', '2.5', '3'].map((v) => (
+                <option key={v} value={v}>
+                  {v === '1' ? 'None' : `${v}× (+${Math.round((Number(v) - 1) * 100)}%)`}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Combined with a course accommodation, the larger multiplier applies. Takes effect for attempts started from
+              now on.
+            </p>
+          </div>
+          <AccessibilityFields prefs={a11yDraft.prefs} onChange={(prefs) => setA11yDraft((d) => ({ ...d, prefs }))} />
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setA11yUser(null)}>
+              Cancel
+            </Button>
+            <Button onClick={() => void saveA11y()}>Save profile</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={pendingRole !== null} onOpenChange={(o) => !o && setPendingRole(null)}>
         <AlertDialogContent>

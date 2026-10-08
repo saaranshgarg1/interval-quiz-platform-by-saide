@@ -17,6 +17,7 @@ import { Button } from './components/ui/button';
 import { Tooltip, TooltipTrigger, TooltipContent } from './components/ui/tooltip';
 import { Toaster } from './components/ui/sonner';
 import { CommandPalette } from './components/CommandPalette';
+import { AccessibilityMenu, AccessibilityProvider } from './components/AccessibilityMenu';
 import { Logo } from './components/Logo';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
@@ -69,6 +70,7 @@ function Layout({ children }: { children: ReactNode }) {
   }, []);
 
   return (
+    <AccessibilityProvider>
     <div className="min-h-[100dvh]">
       <header className="topbar">
         <div className="topbar-inner">
@@ -98,6 +100,7 @@ function Layout({ children }: { children: ReactNode }) {
               <span>Search</span>
               <kbd>⌘K</kbd>
             </button>
+            <AccessibilityMenu inAttempt={inAttempt} />
             <ThemeToggle />
             <span className="topbar-name">{user?.name}</span>
             <span className="role-badge">{user?.role}</span>
@@ -139,6 +142,7 @@ function Layout({ children }: { children: ReactNode }) {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+    </AccessibilityProvider>
   );
 }
 

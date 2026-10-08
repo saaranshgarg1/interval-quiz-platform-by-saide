@@ -236,6 +236,29 @@ instructor-only exam-fairness control, consistent with accommodations and ruling
 
 Student attempt endpoints (`/api/attempts/:id/*`) additionally require the per-attempt
 `X-Attempt-Session` token: ownership alone is not enough, only the one window holding the attempt may act on it.
+This includes `POST /api/attempts/:id/hand` (raise hand).
+
+### 3.10b `/api/insights` — marking, regrading, fairness, appeals (all `requireAuth`)
+
+Course staff read reports, mark written answers and answer raised hands; decisions that change grading for
+everyone, or a student's standing, are instructor-only.
+
+| Method | Path                                            | Student | TA | Instructor | Admin | Gate |
+|--------|-------------------------------------------------|:-------:|:--:|:----------:|:-----:|------|
+| GET    | `/version/:id/grading` · `/questions` · `/fairness` · `/appeals` | ❌ | ✅ | ✅ | ✅ | `courseStaff` |
+| PUT    | `/attempt/:attemptId/question/:questionId/marks`| ❌      | ✅ | ✅         | ✅    | `courseStaff` — hand marking |
+| POST   | `/questions/:questionId/regrade`                | ❌      | ❌ | ✅         | ✅    | `courseInstructor` |
+| POST   | `/slots/:slotId/normalize`                      | ❌      | ❌ | ✅         | ✅    | `courseInstructor` |
+| POST   | `/version/:id/collusion`                        | ❌      | ❌ | ✅         | ✅    | `courseInstructor` — audit-logged |
+| POST   | `/appeals/:appealId/resolve`                    | ❌      | ❌ | ✅         | ✅    | `courseInstructor` |
+| GET    | `/attempt/:attemptId/appeals`                   | own     | ✅ | ✅         | ✅    | owner or `courseStaff` |
+| POST   | `/attempt/:attemptId/appeals`                   | own     | ❌ | ❌         | ❌    | owner only; mark appeals need a visible result |
+| GET    | `/quiz/:quizId/question-health` · `/hands`      | ❌      | ✅ | ✅         | ✅    | `courseStaff` |
+| POST   | `/hands/:handId/answer`                         | ❌      | ✅ | ✅         | ✅    | `courseStaff` |
+
+`PATCH /api/banks/:bankId/questions/:questionId` (re-rate difficulty) is `courseStaff`.
+`GET/PUT /api/auth/accessibility` is the caller's own profile (PUT refused while an attempt is in progress);
+`PUT /api/admin/users/:id/accessibility` (prefs + extra-time multiplier) is admin-only.
 
 ### 3.11 `/api/health`
 

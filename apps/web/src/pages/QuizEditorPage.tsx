@@ -804,7 +804,7 @@ export function QuizEditorPage() {
                       <p className="whitespace-pre-wrap text-muted-foreground">
                         {typeof q.answer === 'string' && q.answer ? q.answer : 'No marking guide.'}
                       </p>
-                      <p className="mt-2 text-muted-foreground">Marked by hand under Results → Marking.</p>
+                      <p className="mt-2 text-muted-foreground">Marked by hand under Analytics → Marking.</p>
                     </div>
                     ) : (
                     <div className="border-t border-border pt-4">
@@ -1105,7 +1105,7 @@ function QuestionFields({
           />
           <p className="muted small mt-1">
             Written answers are never auto-graded. After the exam you mark each one out of {q.points} under
-            Results → Marking; students see their score once marking is done.
+            Analytics → Marking; students see their score once marking is done.
           </p>
         </div>
       )}
