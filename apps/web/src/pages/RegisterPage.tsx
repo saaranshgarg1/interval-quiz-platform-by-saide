@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { motion, useReducedMotion } from 'framer-motion';
-import { Eye, EyeOff, Loader2, User, Mail, KeyRound, Info } from 'lucide-react';
+import { Eye, EyeOff, Loader2, User, Mail, KeyRound, Info, Hash } from 'lucide-react';
 import { useAuth } from '../auth';
 import { ApiError } from '../api';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '../components/ui/card';
@@ -16,8 +16,12 @@ const schema = z
   .object({
     name: z.string().min(2, 'Enter your full name.'),
     email: z.string().email('Enter a valid email address.'),
-    password: z.string().min(6, 'Password must be at least 6 characters.'),
-    confirm: z.string().min(6, 'Enter the password again.'),
+    entry: z
+      .string()
+      .trim()
+      .regex(/^([A-Za-z0-9._/-]{2,32})?$/, 'Use letters and digits only, e.g. 2022CSB1234.'),
+    password: z.string().min(8, 'Password must be at least 8 characters.'),
+    confirm: z.string().min(8, 'Enter the password again.'),
   })
   .refine((d) => d.password === d.confirm, {
     message: 'Passwords do not match.',
@@ -43,14 +47,14 @@ export function RegisterPage() {
     formState: { errors },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', email: '', password: '', confirm: '' },
+    defaultValues: { name: '', email: '', entry: '', password: '', confirm: '' },
   });
 
   const onValid = async (data: FormData) => {
     setFormError(null);
     setBusy(true);
     try {
-      await register(data.name, data.email, data.password, 'student');
+      await register(data.name, data.email, data.password, data.entry || undefined);
       navigate('/');
     } catch (err) {
       if (err instanceof ApiError) {
@@ -148,6 +152,27 @@ export function RegisterPage() {
                 )}
               </div>
 
+              {/* Entry number */}
+              <div className="space-y-1.5">
+                <Label htmlFor="reg-entry">
+                  <Hash className="mr-1.5 inline size-3.5 text-muted-foreground" aria-hidden="true" />
+                  Entry number <span className="font-normal text-muted-foreground">(students)</span>
+                </Label>
+                <Input
+                  id="reg-entry"
+                  autoComplete="off"
+                  placeholder="e.g. 2022CSB1234 — filled from your institute email if left empty"
+                  aria-invalid={!!errors.entry}
+                  aria-describedby={errors.entry ? 'reg-entry-error' : undefined}
+                  {...reg('entry')}
+                />
+                {errors.entry && (
+                  <p id="reg-entry-error" role="alert" className="text-xs text-destructive">
+                    {errors.entry.message}
+                  </p>
+                )}
+              </div>
+
               {/* Password */}
               <div className="space-y-1.5">
                 <Label htmlFor="reg-password">
@@ -159,7 +184,7 @@ export function RegisterPage() {
                     id="reg-password"
                     type={showPassword ? 'text' : 'password'}
                     autoComplete="new-password"
-                    placeholder="At least 6 characters"
+                    placeholder="At least 8 characters"
                     aria-invalid={!!errors.password}
                     aria-describedby={errors.password ? 'reg-password-error' : undefined}
                     {...reg('password')}

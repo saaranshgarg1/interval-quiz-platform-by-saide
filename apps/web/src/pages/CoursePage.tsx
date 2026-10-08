@@ -19,13 +19,15 @@ import {
   History,
   LayoutDashboard,
   Plus,
+  Radio,
   RefreshCw,
   Trash2,
   Users,
 } from 'lucide-react';
 import { api, ApiError } from '../api';
 import { useAuth } from '../auth';
-import type { RosterMember, QuizList, VersionDetail } from '../types';
+import type { RosterMember, QuizList, VersionDetail, PendingEnrollment } from '../types';
+import { useQuery } from '@tanstack/react-query';
 import { useCourse, useCourseQuizzes, qk } from '../lib/queries';
 import { toast } from '../components/ui/sonner';
 import { Page, EmptyState, ErrorState, LoadingSkeleton } from '../components/primitives';
@@ -55,6 +57,7 @@ import {
 } from '../components/ui/dialog';
 import { Textarea } from '../components/ui/textarea';
 import { AccommodationsModal } from '../components/AccommodationsModal';
+import { ConfirmAction } from '../components/ConfirmAction';
 
 /**
  * CoursePage — course home: header + role badge, quiz list (cards), and roster
@@ -98,6 +101,13 @@ function roleBadge(role: string): { variant: 'default' | 'secondary' | 'success'
       return { variant: 'outline', icon: <Users className="size-3" aria-hidden="true" />, label: role };
   }
 }
+
+const PRESET_TEXT: Record<string, string> = {
+  practice: 'practice rules',
+  standard: 'monitored',
+  strict: 'strict exam',
+  custom: 'custom rules',
+};
 
 /** Status → badge variant + icon for quiz version state. */
 function versionBadge(v: { status: string } | null): { variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline'; icon: React.ReactNode; label: string } | null {
@@ -201,19 +211,19 @@ export function CoursePage() {
 
   const handleBulkEnroll = async (data: BulkEnrollForm) => {
     try {
-      const emails = data.emails
-        .split(/[\n,]+/)
-        .map((e) => e.trim())
-        .filter((e) => e.length > 0);
-      const result = await api.post<{ enrolled: any[]; not_found: string[] }>(
+      const result = await api.post<{ enrolled: unknown[]; pending: string[]; invalid: string[] }>(
         `/courses/${cid}/members/bulk`,
-        { emails, memberRole: data.memberRole },
+        { emails: data.emails, memberRole: data.memberRole },
       );
       toast.success(`Enrolled ${result.enrolled.length} member(s).`);
-      if (result.not_found.length > 0) {
-        toast.error(`Not found: ${result.not_found.join(', ')}`);
+      if (result.pending.length > 0) {
+        toast.info(`${result.pending.length} without an account yet — they join automatically when they sign up.`);
+      }
+      if (result.invalid.length > 0) {
+        toast.error(`Could not read: ${result.invalid.join(', ')}`);
       }
       void qc.invalidateQueries({ queryKey: qk.course(cid) });
+      void qc.invalidateQueries({ queryKey: ['courses', cid, 'pending'] });
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Bulk enroll failed.');
     }
@@ -328,6 +338,7 @@ export function CoursePage() {
           />
           <AddMemberForm courseId={cid} onSubmit={handleAddMember} />
           <BulkEnrollForm courseId={cid} onSubmit={handleBulkEnroll} />
+          <PendingList courseId={cid} />
         </section>
       )}
 
@@ -446,6 +457,8 @@ function QuizCard({
               {draftBadge.label}
             </Badge>
           )}
+          {pub?.paused && <Badge variant="warning">Paused</Badge>}
+          {pub?.closed && <Badge variant="destructive">Ended</Badge>}
           {isScheduled && currentVersion?.window_opens_at && (
             <Badge variant="outline" className="inline-flex items-center gap-1">
               <Clock className="size-3" aria-hidden="true" />
@@ -458,8 +471,8 @@ function QuizCard({
       <CardContent className="space-y-3">
         <p className="text-sm text-muted-foreground">
           {pub
-            ? `${pub.questions.length} questions · ${pub.duration_minutes ? `${pub.duration_minutes} min` : 'no timer'} · policy ${pub.integrity_policy} · ${pub.show_scores} scores`
-            : `${draft?.questions.length ?? 0} questions in draft`}
+            ? `${pub.question_count} questions · ${pub.duration_minutes ? `${pub.duration_minutes} min` : 'no timer'} · ${PRESET_TEXT[pub.preset] ?? 'custom rules'} · ${pub.show_scores} scores`
+            : `${draft?.question_count ?? 0} questions in draft`}
         </p>
         {pub?.published_at && (
           <p className="text-xs text-muted-foreground">
@@ -502,16 +515,29 @@ function QuizCard({
           )}
           {isStaff && pub && (
             <>
+              <Button asChild size="sm">
+                <Link to={`/quizzes/${quiz.quiz_id}/monitor`}>
+                  <Radio className="size-3" aria-hidden="true" />
+                  Live monitor
+                </Link>
+              </Button>
               <Button asChild variant="secondary" size="sm">
                 <Link to={`/analytics/version/${pub.id}`}>
                   <LayoutDashboard className="size-3" aria-hidden="true" />
                   Analytics
                 </Link>
               </Button>
-              <Button variant="secondary" size="sm" onClick={() => void onRelease(pub.id)}>
-                <RefreshCw className="size-3" aria-hidden="true" />
-                Release results
-              </Button>
+              <ConfirmAction
+                title={`Release results for “${title}”?`}
+                description="Every student who has finished sees their score and per-question marks right away. This cannot be taken back."
+                confirmLabel="Release results"
+                onConfirm={() => void onRelease(pub.id)}
+              >
+                <Button variant="secondary" size="sm">
+                  <RefreshCw className="size-3" aria-hidden="true" />
+                  Release results
+                </Button>
+              </ConfirmAction>
               <Button asChild variant="secondary" size="sm">
                 <Link to={`/quizzes/${quiz.quiz_id}`}>
                   <Eye className="size-3" aria-hidden="true" />
@@ -560,7 +586,7 @@ function QuizCard({
                   className="flex items-center justify-between rounded-[var(--radius-md)] border p-3"
                 >
                   <div className="text-sm">
-                    <span className="font-medium">v{v.version}</span> · {v.status} · {v.questions.length} Qs
+                    <span className="font-medium">v{v.version}</span> · {v.status} · {v.question_count} Qs
                   </div>
                   <Button variant="secondary" size="sm" onClick={() => void handleRestore(v.version)}>
                     Restore
@@ -621,6 +647,11 @@ function RosterTable({
         accessorKey: 'name',
         header: 'Name',
         cell: ({ getValue }) => <span className="font-medium">{getValue<string>()}</span>,
+      },
+      {
+        accessorKey: 'entry_number',
+        header: 'Entry no.',
+        cell: ({ getValue }) => <span className="font-mono">{getValue<string | null>() ?? '—'}</span>,
       },
       {
         accessorKey: 'email',
@@ -831,7 +862,9 @@ function BulkEnrollForm({
       <CardHeader>
         <CardTitle>Bulk enroll</CardTitle>
         <CardDescription>
-          Add multiple members at once. Separate emails with newlines or commas.
+          Paste a class list: one student per line as <code>email, entry number, name</code> (a registrar CSV
+          works), or just emails separated by commas. People without an account yet are enrolled automatically
+          when they register or sign in with Google.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -840,7 +873,7 @@ function BulkEnrollForm({
             <Label htmlFor={`bulk-emails-${courseId}`}>Emails</Label>
             <Textarea
               id={`bulk-emails-${courseId}`}
-              placeholder="student1@iitrpr.ac.in, student2@iitrpr.ac.in"
+              placeholder={'2022csb1234@iitrpr.ac.in, 2022CSB1234, Aisha Khan\n2022csb1250@iitrpr.ac.in, 2022CSB1250'}
               rows={4}
               aria-invalid={!!errors.emails}
               aria-describedby={errors.emails ? `bulk-emails-${courseId}-error` : undefined}
@@ -877,6 +910,38 @@ function BulkEnrollForm({
             )}
           </Button>
         </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Invitations for people who have not created an account yet. */
+function PendingList({ courseId }: { courseId: number }) {
+  const { data } = useQuery({
+    queryKey: ['courses', courseId, 'pending'],
+    queryFn: () => api.get<{ pending: PendingEnrollment[] }>(`/courses/${courseId}/pending`),
+  });
+  const pending = data?.pending ?? [];
+  if (pending.length === 0) return null;
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle>Waiting to sign up ({pending.length})</CardTitle>
+        <CardDescription>
+          Enrolled automatically the first time they register or sign in with this email.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ul className="max-h-60 space-y-1 overflow-y-auto text-sm">
+          {pending.map((p) => (
+            <li key={p.id} className="flex flex-wrap gap-x-3 text-muted-foreground">
+              <span className="font-mono text-foreground">{p.email}</span>
+              {p.entry_number && <span className="font-mono">{p.entry_number}</span>}
+              {p.name && <span>{p.name}</span>}
+              <span>({p.role})</span>
+            </li>
+          ))}
+        </ul>
       </CardContent>
     </Card>
   );

@@ -1,5 +1,7 @@
 import { createContext, useContext, useCallback, useState, useEffect, type ReactNode } from 'react';
 import { api, getToken, setToken } from './api';
+import { clearAllAttemptStorage } from './lib/attempt-storage';
+import { queryClient } from './lib/query';
 import type { User } from './types';
 
 interface AuthState {
@@ -12,7 +14,7 @@ interface AuthState {
    */
   ready: boolean;
   login: (email: string, password: string) => Promise<User>;
-  register: (name: string, email: string, password: string, role: 'student' | 'instructor') => Promise<User>;
+  register: (name: string, email: string, password: string, entryNumber?: string) => Promise<User>;
   sso: (idToken: string) => Promise<User>;
   logout: () => void;
   refresh: () => Promise<void>;
@@ -61,12 +63,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const register = useCallback(
-    async (name: string, email: string, password: string, role: 'student' | 'instructor') => {
+    async (name: string, email: string, password: string, entryNumber?: string) => {
       const res = await api.post<{ token: string; user: User }>('/auth/register', {
         name,
         email,
         password,
-        role,
+        entry_number: entryNumber,
       });
       setToken(res.token);
       setTok(res.token);
@@ -85,6 +87,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
+    // Shared lab machines: leave no attempt session, buffered answers or cached data behind.
+    clearAllAttemptStorage();
+    queryClient.clear();
     setToken(null);
     setTok(null);
     setUser(null);

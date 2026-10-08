@@ -18,6 +18,36 @@ to working code.
 
 ---
 
+## Strict exam platform (500 students at once)
+
+Interval runs proctored exams for a whole class simultaneously. Full guide:
+**[`docs/exam-platform.md`](docs/exam-platform.md)**.
+
+* **Instructor-configurable rules per quiz** (presets: Practice / Monitored / Strict exam): allow or forbid tab
+  switching, window/app switching, copy & paste, right-click; require full screen; watermark with name + entry
+  number; exit & resume allowed or not (re-entry locks or submits); violation threshold with lock / auto-submit /
+  warn-only.
+* **Timing**: server-side overall timer, optional per-question timers (same for all or set per question) with
+  one-way navigation, scheduled windows, late-entry cut-off, accommodations.
+* **Access**: hall access code, exam-network IP allow-list, random N-of-M question draw, per-student question and
+  option shuffling.
+* **Random questions from banks**: bank questions carry a difficulty (easy/medium/hard) and tags; a quiz slot
+  draws a different question of that difficulty for every student, worth the marks you set.
+* **Users page (admins)**: promote accounts to instructor/admin, fix entry numbers, revoke sessions, back up.
+* **Live monitor**: who is writing, online/offline, time left, progress, violations, IP changes; extend time for
+  everyone or for specific students **by entry number** (even reopen a timed-out attempt), pause/resume the whole
+  quiz, end it, announce or message students, lock/reinstate/submit/allow re-entry per student.
+* **Flagged candidates**: every unauthorized-activity signal per candidate rolled into a Low/Medium/High level,
+  plus flags raised by invigilators; resolved with a recorded note.
+* **Several quizzes live at once**, in the same or different courses, each fully independent; a *Live now*
+  overview for staff and an *Exam schedule* for students.
+* **Integrity of the record**: one active window per attempt, append-only answer history, audit log, receipts,
+  gradebook CSV with entry numbers, absentees, per-question marks and flag columns.
+* **Scale**: 500 students — 0 errors, saves 2 ms p50 / 15 ms p99 — measured by the bundled load test
+  ([results](docs/loadtest/results-500-students.json)).
+
+---
+
 ## Repo layout
 
 ```
@@ -60,8 +90,10 @@ Other scripts:
 pnpm run build        # tsc (api) + tsc & vite build (web) -> apps/web/dist
 pnpm run start:web    # serve the built web app on :5174
 pnpm run typecheck    # tsc --noEmit for both workspaces
-pnpm test             # API suite (node:test) — 26 tests
-pnpm run test:e2e     # Playwright E2E regression in system Chromium (needs dev servers up)
+pnpm test             # API suite (node:test) — 78 tests
+pnpm run test:e2e     # Playwright E2E in system Chromium/Edge (needs dev servers up; set CHROMIUM_PATH)
+pnpm --filter @interval/api loadtest   # 500 simultaneous students against a production build
+pnpm --filter @interval/api backup     # online database backup (safe during an exam)
 ```
 
 ### Demo accounts (seed data)
@@ -70,7 +102,10 @@ pnpm run test:e2e     # Playwright E2E regression in system Chromium (needs dev 
 |---|---|---|
 | `admin@saide.local` | `admin123` | admin |
 | `shlok@iitrpr.ac.in` | `instructor123` | instructor |
-| `student1@iitrpr.ac.in` … `student8@iitrpr.ac.in` | `student123` | student |
+| `student1@iitrpr.ac.in` … `student8@iitrpr.ac.in` | `student123` | student (entry numbers `2023CSB0001`…`0008`) |
+
+The HCI checkpoint quiz is a monitored exam with access code **`HCI-2026`**; CS305 also has a timed, one-way,
+full-screen quiz so two exams can be demonstrated live at the same time.
 
 Two courses are seeded (`AI511` HCI, `CS305` DB), the HCI course already contains a **published** quiz
 ("HCI Basics – Checkpoint Quiz 1", strict policy) and a couple of locked/expired attempts so the incident

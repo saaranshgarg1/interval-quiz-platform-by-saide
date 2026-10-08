@@ -128,7 +128,8 @@ export function useAudit(attemptId: number, opts?: Extra<Audit>) {
 export function useAnalytics(versionId: number, opts?: Extra<QuizAnalytics>) {
   return useQuery({
     queryKey: qk.analytics(versionId),
-    queryFn: () => api.get<QuizAnalytics>(`/analytics/version/${versionId}`),
+    // The API wraps the payload as { analytics }.
+    queryFn: async () => (await api.get<{ analytics: QuizAnalytics }>(`/analytics/version/${versionId}`)).analytics,
     enabled: Number.isFinite(versionId),
     ...opts,
   });

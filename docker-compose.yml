@@ -7,13 +7,23 @@ services:
     restart: unless-stopped
     ports:
       - "4000:4000"
+    # Secrets live in .env next to this file (never committed):
+    #   INTERVAL_JWT_SECRET=<long random string>
+    #   INTERVAL_PASSWORD_PEPPER=<long random string>
+    env_file:
+      - .env
     environment:
       - NODE_ENV=production
       - PORT=4000
       - INTERVAL_DATA_DIR=/app/data
-      - JWT_SECRET=production-secret-replace-in-prod
+      # Same-origin web app is served by the API; add other origins if needed.
+      - INTERVAL_WEB_ORIGIN=${INTERVAL_WEB_ORIGIN:-http://localhost:4000}
+      # Set when a reverse proxy / load balancer on another host terminates TLS.
+      - INTERVAL_TRUST_PROXY=${INTERVAL_TRUST_PROXY:-loopback}
+      - INTERVAL_BACKUP_EVERY_MINUTES=${INTERVAL_BACKUP_EVERY_MINUTES:-30}
     volumes:
       - interval_data:/app/data
+    stop_grace_period: 15s
 
 volumes:
   interval_data:

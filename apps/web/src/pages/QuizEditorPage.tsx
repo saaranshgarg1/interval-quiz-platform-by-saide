@@ -2,9 +2,9 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../api';
 import type {
+  ExamSettings,
   QuizDetailResponse,
   QuestionType,
-  IntegrityPolicy,
   ShowScores,
   QuestionEditor,
   QuestionBank,
@@ -36,7 +36,11 @@ import {
   AlertDialogAction,
   AlertDialogCancel,
 } from '@/components/ui/alert-dialog';
-import { ChevronLeft, Copy, Trash2 } from 'lucide-react';
+import { ChevronLeft, Copy, Radio, ShieldCheck, Trash2 } from 'lucide-react';
+import { ExamSettingsPanel, DEFAULT_EXAM_SETTINGS } from '@/components/ExamSettingsPanel';
+import { ConfirmAction } from '@/components/ConfirmAction';
+import { RandomFromBank, SlotList } from '@/components/RandomFromBank';
+import type { VersionDetail } from '../types';
 
 const EMPTY_QUESTION = () => ({
   qtype: 'single' as QuestionType,
@@ -45,6 +49,8 @@ const EMPTY_QUESTION = () => ({
   answer: 0 as number | number[] | string,
   tolerance: '0.01',
   points: 1,
+  time_limit_seconds: '' as string,
+  allow_assumptions: false,
   id: null as number | null,
 });
 
@@ -76,8 +82,7 @@ export function QuizEditorPage() {
   const [shuffleQ, setShuffleQ] = useState<boolean>(false);
   const [shuffleO, setShuffleO] = useState<boolean>(false);
   const [attempts, setAttempts] = useState('1');
-  const [policy, setPolicy] = useState<IntegrityPolicy>('off');
-  const [trigger, setTrigger] = useState('focus_exit');
+  const [examSettings, setExamSettings] = useState<ExamSettings>(DEFAULT_EXAM_SETTINGS);
   const [showScores, setShowScores] = useState<ShowScores>('release');
   const [quizType, setQuizType] = useState<'anytime' | 'scheduled'>('anytime');
   const [windowOpensAt, setWindowOpensAt] = useState('');
@@ -108,8 +113,7 @@ export function QuizEditorPage() {
         setShuffleQ(!!draft.shuffle_questions);
         setShuffleO(!!draft.shuffle_options);
         setAttempts(String(draft.attempts_allowed));
-        setPolicy(draft.integrity_policy);
-        setTrigger(draft.policy_trigger);
+        setExamSettings({ ...DEFAULT_EXAM_SETTINGS, ...(draft.exam_settings as ExamSettings) });
         setShowScores(draft.show_scores);
         setQuizType(draft.quiz_type || 'anytime');
         setWindowOpensAt(draft.window_opens_at ? convertToDatetimeLocal(draft.window_opens_at) : '');
@@ -131,8 +135,8 @@ export function QuizEditorPage() {
   if (error) return <div className="banner error">{error}</div>;
   if (!detail) return <p className="muted">Loading quiz…</p>;
 
-  const saveMeta = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const saveMeta = async (e?: React.FormEvent) => {
+    e?.preventDefault();
     setSavingMeta(true);
     setError(null);
     try {
@@ -143,8 +147,7 @@ export function QuizEditorPage() {
         shuffle_questions: shuffleQ ? 1 : 0,
         shuffle_options: shuffleO ? 1 : 0,
         attempts_allowed: Number(attempts),
-        integrity_policy: policy,
-        policy_trigger: trigger,
+        exam_settings: examSettings,
         show_scores: showScores,
         quiz_type: quizType,
         window_opens_at: quizType === 'scheduled' ? new Date(windowOpensAt).toISOString() : null,
@@ -272,8 +275,9 @@ export function QuizEditorPage() {
     const edit = answerEdits[q.id];
     if (!edit) return;
     try {
-      await api.patch(`/quizzes/questions/${q.id}/answer`, {
-        answer: edit.answer,
+      // Regrades every submitted paper with the corrected key.
+      const res = await api.post<{ regraded: number; changed: number }>(`/insights/questions/${q.id}/regrade`, {
+        answer: q.qtype === 'numeric' ? Number(edit.answer) : edit.answer,
         tolerance: edit.tolerance !== undefined ? (edit.tolerance === '' ? 0 : Number(edit.tolerance)) : undefined,
       });
       setAnswerEdits((prev) => {
@@ -281,7 +285,11 @@ export function QuizEditorPage() {
         delete next[q.id];
         return next;
       });
-      toast.success('Answer key updated');
+      toast.success('Answer key updated', {
+        description: res.regraded
+          ? `${res.regraded} submitted paper(s) regraded — ${res.changed} score(s) changed.`
+          : 'No submissions yet.',
+      });
       void load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to update answer key.');
@@ -307,6 +315,10 @@ export function QuizEditorPage() {
       setError('Failed to load bank questions.');
     }
   };
+
+  /** Swap in the server's copy of a version after a slot was added/removed. */
+  const replaceVersion = (version: VersionDetail) =>
+    setDetail((prev) => (prev ? { ...prev, versions: prev.versions.map((v) => (v.id === version.id ? version : v)) } : prev));
 
   const importBankQuestion = async (bq: BankQuestion) => {
     if (!draft) return;
@@ -357,14 +369,37 @@ export function QuizEditorPage() {
               <Button size="sm" variant="secondary" onClick={() => void openBankModal()}>
                 Import from Bank
               </Button>
-              <Button size="sm" onClick={() => void publish()} disabled={draft.questions.length === 0}>
-                Publish live version
-              </Button>
+              <ConfirmAction
+                title="Publish this version to students?"
+                description={
+                  <>
+                    <p>
+                      Students can see it and start as soon as its rules allow. The questions and exam rules are then
+                      frozen: later edits go into a new draft version, and students who already started stay on this one.
+                    </p>
+                    <p className="mt-2">Unsaved changes in the settings form are not included — save them first.</p>
+                  </>
+                }
+                confirmLabel="Publish"
+                onConfirm={() => void publish()}
+              >
+                <Button size="sm" disabled={draft.questions.length + (draft.slots?.length ?? 0) === 0}>
+                  Publish live version
+                </Button>
+              </ConfirmAction>
             </>
           )}
           {!editable && published && (
             <Button size="sm" onClick={() => void cloneDraft()}>
               Create new draft version
+            </Button>
+          )}
+          {published && (
+            <Button asChild size="sm" variant="secondary">
+              <a href={`/quizzes/${quizId}/monitor`}>
+                <Radio className="size-4" />
+                Live monitor
+              </a>
             </Button>
           )}
           <Button size="sm" variant="secondary" onClick={() => void duplicateQuiz()}>
@@ -399,7 +434,7 @@ export function QuizEditorPage() {
       <Dialog open={showBankModal} onOpenChange={setShowBankModal}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Import Questions from Bank</DialogTitle>
+            <DialogTitle>Add questions from a bank</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div>
@@ -419,15 +454,29 @@ export function QuizEditorPage() {
               </select>
             </div>
 
+            {selectedBankId !== '' && bankQuestions.length > 0 && (
+              <RandomFromBank
+                quizId={Number(quizId)}
+                bankId={Number(selectedBankId)}
+                questions={bankQuestions}
+                showTimeLimit={examSettings.question_timer === 'per_question'}
+                onAdded={(v) => {
+                  replaceVersion(v);
+                  setShowBankModal(false);
+                }}
+              />
+            )}
+
             {bankQuestions.length > 0 && (
               <div className="space-y-2">
-                <h4 className="text-sm font-semibold">Available Questions ({bankQuestions.length})</h4>
+                <h4 className="text-sm font-semibold">Or copy specific questions ({bankQuestions.length}) — every student gets these</h4>
                 {bankQuestions.map((bq) => (
                   <Card key={bq.id}>
                     <CardContent className="p-3 flex justify-between items-center">
                       <div className="flex-1 mr-3">
                         <div className="text-xs text-muted-foreground mb-1">
-                          {bq.qtype.toUpperCase()} · {bq.points} pt
+                          {bq.qtype.toUpperCase()} · {bq.points} pt · {bq.difficulty ?? 'medium'}
+                          {bq.tags.length ? ` · ${bq.tags.join(', ')}` : ''}
                         </div>
                         <RichText content={bq.text} />
                       </div>
@@ -498,20 +547,6 @@ export function QuizEditorPage() {
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="meta-pol">Integrity policy</Label>
-                  <select
-                    id="meta-pol"
-                    value={policy}
-                    onChange={(e) => setPolicy(e.target.value as IntegrityPolicy)}
-                    disabled={!editable}
-                    className="mt-1 block w-full rounded-[var(--radius-md)] border border-[var(--line-strong)] bg-card px-3 py-2 text-sm focus:outline-none focus:ring-[3px] focus:ring-ring/40"
-                  >
-                    <option value="off">Off (practice)</option>
-                    <option value="warn">Warn on tab exit</option>
-                    <option value="strict">Strict lock on tab exit (HTTP 423)</option>
-                  </select>
-                </div>
                 <div>
                   <Label htmlFor="meta-scores">Show scores</Label>
                   <select
@@ -600,16 +635,18 @@ export function QuizEditorPage() {
         <Card className="h-full flex flex-col">
           <CardContent className="p-6 flex-1">
             <h3 className="text-lg font-semibold mb-4">
-              Questions ({draft ? draft.questions.length : detail.versions[0]?.questions.length ?? 0})
+              Questions ({(draft ?? published ?? detail.versions[0])
+                ? (draft ?? published ?? detail.versions[0])!.questions.length + ((draft ?? published ?? detail.versions[0])!.slots?.length ?? 0)
+                : 0})
             </h3>
-            {draft && draft.questions.length === 0 && (
+            {draft && draft.questions.length + (draft.slots?.length ?? 0) === 0 && (
               <p className="text-sm text-muted-foreground mb-4">
                 Add your first question below. You need at least one before publishing.
               </p>
             )}
             {editable && (
               <form onSubmit={saveNewQuestion} className="space-y-4 border-t border-border pt-4 mt-4">
-                <QuestionFields q={newQ} setQ={setNewQ} />
+                <QuestionFields q={newQ} setQ={setNewQ} showTimeLimit={examSettings.question_timer === 'per_question'} defaultSeconds={examSettings.question_time_seconds} />
                 <Button type="submit" size="sm">
                   Add question
                 </Button>
@@ -619,9 +656,56 @@ export function QuizEditorPage() {
         </Card>
       </div>
 
-      {draft && draft.questions.length > 0 && (
+      <Card className="mt-6">
+        <CardContent className="p-6">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="flex items-center gap-2 text-lg font-semibold">
+                <ShieldCheck className="size-5 text-primary" aria-hidden="true" />
+                Exam rules & proctoring
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                Tab and window switching, copy & paste, full screen, exit & resume, timers and access. Frozen when you
+                publish, like the questions.
+              </p>
+            </div>
+            {editable && (
+              <Button size="sm" disabled={savingMeta} onClick={() => void saveMeta()}>
+                {savingMeta ? 'Saving…' : 'Save exam rules'}
+              </Button>
+            )}
+          </div>
+          <ExamSettingsPanel
+            value={examSettings}
+            onChange={setExamSettings}
+            disabled={!editable}
+            questionCount={(draft ?? published)?.question_count ?? 0}
+            scheduled={quizType === 'scheduled'}
+          />
+          {(draft ?? published)?.rules && (
+            <div className="mt-4 rounded-[var(--radius-md)] bg-muted/60 p-4">
+              <p className="mb-1 text-sm font-semibold">What students will read before starting (as last saved)</p>
+              <ul className="list-inside list-disc space-y-1 text-sm text-muted-foreground">
+                {(draft ?? published)!.rules.map((r) => (
+                  <li key={r}>{r}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {draft && draft.questions.length + (draft.slots?.length ?? 0) > 0 && (
         <section className="mt-6">
           <h3 className="text-lg font-semibold mb-4">Question list</h3>
+          {(draft.slots?.length ?? 0) > 0 && (
+            <div className="mb-3">
+              <p className="mb-2 text-sm text-muted-foreground">
+                Random questions — each student gets a different bank question here:
+              </p>
+              <SlotList slots={draft.slots} editable onChanged={replaceVersion} />
+            </div>
+          )}
           <div className="flex flex-col gap-3">
             {draft.questions.map((q) => {
               const edit = edits[q.id];
@@ -633,6 +717,9 @@ export function QuizEditorPage() {
                         <strong>Q{q.order_index + 1}</strong>
                         <Badge variant="secondary">{q.qtype}</Badge>
                         <span className="text-sm text-muted-foreground">{q.points} pt</span>
+                        {examSettings.question_timer === 'per_question' && (
+                          <Badge variant="outline">{q.time_limit_seconds ?? examSettings.question_time_seconds}s</Badge>
+                        )}
                       </div>
                       <Button
                         size="sm"
@@ -647,7 +734,12 @@ export function QuizEditorPage() {
                     </div>
                     {edit && (
                       <div className="mt-4 p-4 bg-muted rounded-lg">
-                        <QuestionFields q={edit} setQ={(next) => setEdits({ ...edits, [q.id]: next })} />
+                        <QuestionFields
+                          q={edit}
+                          setQ={(next) => setEdits({ ...edits, [q.id]: next })}
+                          showTimeLimit={examSettings.question_timer === 'per_question'}
+                          defaultSeconds={examSettings.question_time_seconds}
+                        />
                         <div className="flex gap-2 mt-4">
                           <Button size="sm" onClick={() => void saveEdit(q)}>
                             Save
@@ -680,6 +772,14 @@ export function QuizEditorPage() {
       {!draft && published && (
         <section className="mt-6">
           <h3 className="text-lg font-semibold mb-4">Published Questions (Answer Key Editor)</h3>
+          {(published.slots?.length ?? 0) > 0 && (
+            <div className="mb-3">
+              <p className="mb-2 text-sm text-muted-foreground">
+                Random questions — answer keys come from the bank questions each student drew:
+              </p>
+              <SlotList slots={published.slots} editable={false} />
+            </div>
+          )}
           <div className="flex flex-col gap-3">
             {published.questions.map((q) => {
               const edit = answerEdits[q.id];
@@ -690,12 +790,25 @@ export function QuizEditorPage() {
                       <strong>Q{q.order_index + 1}</strong>
                       <Badge variant="secondary">{q.qtype}</Badge>
                       <span className="text-sm text-muted-foreground">{q.points} pt</span>
+                      {q.allow_assumptions && <Badge variant="outline">assumptions allowed</Badge>}
+                      {q.grading_mode && q.grading_mode !== 'normal' && (
+                        <Badge variant="warning">{q.grading_mode === 'dropped' ? 'dropped' : 'full marks for all'}</Badge>
+                      )}
                     </div>
                     <div className="mt-2 mb-4">
                       <RichText content={q.text} />
                     </div>
+                    {q.qtype === 'descriptive' ? (
+                    <div className="border-t border-border pt-4 text-sm">
+                      <Label className="text-sm font-semibold mb-2 block">Marking guide</Label>
+                      <p className="whitespace-pre-wrap text-muted-foreground">
+                        {typeof q.answer === 'string' && q.answer ? q.answer : 'No marking guide.'}
+                      </p>
+                      <p className="mt-2 text-muted-foreground">Marked by hand under Results → Marking.</p>
+                    </div>
+                    ) : (
                     <div className="border-t border-border pt-4">
-                      <Label className="text-sm font-semibold mb-2 block">Edit Answer Key</Label>
+                      <Label className="text-sm font-semibold mb-2 block">Edit answer key (regrades submitted papers)</Label>
                       {(q.qtype === 'single' || q.qtype === 'multiple') && (
                         <div className="space-y-2">
                           {q.options.map((opt, idx) => {
@@ -811,6 +924,7 @@ export function QuizEditorPage() {
                         </Button>
                       )}
                     </div>
+                    )}
                   </CardContent>
                 </Card>
               );
@@ -830,6 +944,8 @@ function questionToEdit(q: QuestionEditor): ReturnType<typeof EMPTY_QUESTION> {
     answer: q.answer as number | number[] | string,
     tolerance: q.tolerance == null ? '0.01' : String(q.tolerance),
     points: q.points,
+    time_limit_seconds: q.time_limit_seconds == null ? '' : String(q.time_limit_seconds),
+    allow_assumptions: Boolean(q.allow_assumptions),
     id: q.id,
   };
 }
@@ -839,6 +955,8 @@ function buildQuestionPayload(q: ReturnType<typeof EMPTY_QUESTION>) {
     qtype: q.qtype,
     text: q.text,
     points: Number(q.points) || 1,
+    time_limit_seconds: q.time_limit_seconds === '' ? null : Number(q.time_limit_seconds),
+    allow_assumptions: q.allow_assumptions,
   };
   if (q.qtype === 'single' || q.qtype === 'multiple') {
     body.options = q.options.filter((o) => o.trim() !== '');
@@ -851,8 +969,8 @@ function buildQuestionPayload(q: ReturnType<typeof EMPTY_QUESTION>) {
     body.answer = Number(q.answer);
     body.tolerance = q.tolerance === '' ? 0 : Number(q.tolerance);
   }
-  if (q.qtype === 'short') {
-    body.answer = String(q.answer ?? '');
+  if (q.qtype === 'short' || q.qtype === 'descriptive') {
+    body.answer = typeof q.answer === 'string' ? q.answer : '';
   }
   return body;
 }
@@ -860,9 +978,13 @@ function buildQuestionPayload(q: ReturnType<typeof EMPTY_QUESTION>) {
 function QuestionFields({
   q,
   setQ,
+  showTimeLimit = false,
+  defaultSeconds = 60,
 }: {
   q: ReturnType<typeof EMPTY_QUESTION>;
   setQ: (next: ReturnType<typeof EMPTY_QUESTION>) => void;
+  showTimeLimit?: boolean;
+  defaultSeconds?: number;
 }) {
   const set = (patch: Partial<ReturnType<typeof EMPTY_QUESTION>>) => setQ({ ...q, ...patch });
 
@@ -887,12 +1009,27 @@ function QuestionFields({
             <option value="multiple">Multiple choice</option>
             <option value="short">Short answer</option>
             <option value="numeric">Numeric</option>
+            <option value="descriptive">Descriptive (marked by hand)</option>
           </select>
         </div>
         <div className="field">
-          <label htmlFor="q-points">Points</label>
+          <label htmlFor="q-points">{q.qtype === 'descriptive' ? 'Marks (out of)' : 'Points'}</label>
           <input id="q-points" type="number" min={0.25} step={0.25} value={q.points} onChange={(e) => set({ points: Number(e.target.value) })} />
         </div>
+        {showTimeLimit && (
+          <div className="field">
+            <label htmlFor="q-time">Time limit (seconds)</label>
+            <input
+              id="q-time"
+              type="number"
+              min={5}
+              max={7200}
+              placeholder={`${defaultSeconds} (default)`}
+              value={q.time_limit_seconds}
+              onChange={(e) => set({ time_limit_seconds: e.target.value })}
+            />
+          </div>
+        )}
       </div>
 
       {(q.qtype === 'single' || q.qtype === 'multiple') && (
@@ -955,6 +1092,36 @@ function QuestionFields({
           <input id="q-short" value={String(q.answer ?? '')} onChange={(e) => set({ answer: e.target.value })} />
         </div>
       )}
+
+      {q.qtype === 'descriptive' && (
+        <div className="field">
+          <label htmlFor="q-guide">Model answer / marking guide (optional — shown to graders, never to students before release)</label>
+          <textarea
+            id="q-guide"
+            rows={3}
+            value={typeof q.answer === 'string' ? q.answer : ''}
+            onChange={(e) => set({ answer: e.target.value })}
+            placeholder="e.g. 2 marks: states Fitts's law. 2 marks: explains distance vs width. 1 mark: an example."
+          />
+          <p className="muted small mt-1">
+            Written answers are never auto-graded. After the exam you mark each one out of {q.points} under
+            Results → Marking; students see their score once marking is done.
+          </p>
+        </div>
+      )}
+
+      <label className="mt-2 flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={q.allow_assumptions}
+          onChange={(e) => set({ allow_assumptions: e.target.checked })}
+          style={{ width: 'auto', marginTop: 3 }}
+        />
+        <span>
+          <strong>Allow assumptions</strong> — students get a box to write any assumption they made. You can read
+          them while marking and award marks for a reasonable one.
+        </span>
+      </label>
     </div>
   );
 }

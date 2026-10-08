@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { LiveExamsCard, UpcomingExamsCard } from '@/components/exam/LiveExamsCard';
 
 interface CourseBlock {
   id: number;
@@ -93,6 +94,8 @@ export function DashboardPage() {
 
       {!error && (
         <>
+          <LiveExamsCard />
+          {!loading && <UpcomingExamsCard courses={courses.filter((c) => c.my_role === 'student')} />}
           <section className="mb-8">
             <h2 className="font-display text-lg font-semibold tracking-tight text-foreground mb-4">Quick actions</h2>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

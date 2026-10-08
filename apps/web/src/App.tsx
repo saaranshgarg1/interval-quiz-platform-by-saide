@@ -1,6 +1,16 @@
-import { Routes, Route, NavLink, Navigate, useNavigate } from 'react-router-dom';
+import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from './auth';
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from './components/ui/alert-dialog';
 import { Moon, Sun, LogOut, Search } from 'lucide-react';
 import { useTheme } from './lib/theme';
 import { Button } from './components/ui/button';
@@ -20,6 +30,8 @@ import { ResultDetailPage } from './pages/ResultDetailPage';
 import { IncidentsPage } from './pages/IncidentsPage';
 import { QuestionBankPage } from './pages/QuestionBankPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
+import { MonitorPage } from './pages/MonitorPage';
+import { AdminPage } from './pages/AdminPage';
 
 function ThemeToggle() {
   const { theme, toggle } = useTheme();
@@ -40,9 +52,21 @@ function ThemeToggle() {
   );
 }
 
+/** Other parts of the app (e.g. the command palette) ask for sign-out through this event. */
+export const SIGN_OUT_EVENT = 'interval:request-sign-out';
+
 function Layout({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
+  const inAttempt = location.pathname.startsWith('/attempts/');
+
+  useEffect(() => {
+    const ask = () => setConfirmSignOut(true);
+    window.addEventListener(SIGN_OUT_EVENT, ask);
+    return () => window.removeEventListener(SIGN_OUT_EVENT, ask);
+  }, []);
 
   return (
     <div className="min-h-[100dvh]">
@@ -57,6 +81,7 @@ function Layout({ children }: { children: ReactNode }) {
             </NavLink>
             <NavLink to="/results">My results</NavLink>
             {user?.role !== 'student' && <NavLink to="/incidents">Incidents</NavLink>}
+            {user?.role === 'admin' && <NavLink to="/admin">Users</NavLink>}
           </nav>
           <div className="topbar-user">
             <button
@@ -78,14 +103,7 @@ function Layout({ children }: { children: ReactNode }) {
             <span className="role-badge">{user?.role}</span>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
-                    logout();
-                    navigate('/login');
-                  }}
-                >
+                <Button variant="secondary" size="sm" onClick={() => setConfirmSignOut(true)}>
                   <LogOut />
                   Sign out
                 </Button>
@@ -96,6 +114,30 @@ function Layout({ children }: { children: ReactNode }) {
         </div>
       </header>
       <main className="page">{children}</main>
+      <AlertDialog open={confirmSignOut} onOpenChange={setConfirmSignOut}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{inAttempt ? 'Sign out in the middle of a quiz?' : 'Sign out?'}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {inAttempt
+                ? 'This window stops working on your attempt. Your saved answers are kept, but the timer keeps running, and if exit & resume is not allowed for this quiz, coming back will lock or submit your attempt.'
+                : 'You will need to sign in again to continue. Anything not yet saved on this device is cleared.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel autoFocus>{inAttempt ? 'Stay in the quiz' : 'Cancel'}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:brightness-105"
+              onClick={() => {
+                logout();
+                navigate('/login');
+              }}
+            >
+              Sign out
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -121,6 +163,8 @@ function Shell() {
         <Route path="/courses/:courseId/banks" element={<QuestionBankPage />} />
         <Route path="/quizzes/:quizId" element={<QuizEditorPage />} />
         <Route path="/quizzes/:quizId/preflight" element={<QuizPreflightPage />} />
+        <Route path="/quizzes/:quizId/monitor" element={<MonitorPage />} />
+        <Route path="/admin" element={<AdminPage />} />
         <Route path="/attempts/:attemptId" element={<AttemptPage />} />
         <Route path="/analytics/version/:versionId" element={<AnalyticsPage />} />
         <Route path="/results" element={<ResultsPage />} />

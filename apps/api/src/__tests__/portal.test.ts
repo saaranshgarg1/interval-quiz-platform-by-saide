@@ -1,3 +1,4 @@
+import './_env.js';
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { userRepo, courseRepo, quizRepo, quizVersionRepo, questionRepo, attemptRepo, bankRepo, accommodationRepo, analyticsRepo, resultRepo } from '../repo.js';
@@ -107,21 +108,21 @@ describe('Interval E2E Verification & Test Suite', () => {
   test('Auto-Grading Engine: single, multiple, numeric with tolerance, short answer', () => {
     const qSingle: Question = {
       id: 1, quiz_version_id: 1, version: 1, qtype: 'single',
-      text: 'Sample', options: ['A', 'B'], answer: 0, tolerance: null, points: 2, order_index: 0, is_latest: 1, created_at: ''
+      text: 'Sample', options: ['A', 'B'], answer: 0, tolerance: null, points: 2, order_index: 0, is_latest: 1, time_limit_seconds: null, allow_assumptions: 0, grading_mode: 'normal', accept_also: [], bonus: 0, created_at: ''
     };
     assert.ok(isAnswerCorrect(qSingle, 0));
     assert.ok(!isAnswerCorrect(qSingle, 1));
 
     const qMulti: Question = {
       id: 2, quiz_version_id: 1, version: 1, qtype: 'multiple',
-      text: 'Select even primes', options: ['2', '3', '4', '5'], answer: [0], tolerance: null, points: 2, order_index: 1, is_latest: 1, created_at: ''
+      text: 'Select even primes', options: ['2', '3', '4', '5'], answer: [0], tolerance: null, points: 2, order_index: 1, is_latest: 1, time_limit_seconds: null, allow_assumptions: 0, grading_mode: 'normal', accept_also: [], bonus: 0, created_at: ''
     };
     assert.ok(isAnswerCorrect(qMulti, [0]));
     assert.ok(!isAnswerCorrect(qMulti, [0, 1]));
 
     const qNum: Question = {
       id: 3, quiz_version_id: 1, version: 1, qtype: 'numeric',
-      text: 'Value of pi', options: [], answer: 3.14, tolerance: 0.01, points: 3, order_index: 2, is_latest: 1, created_at: ''
+      text: 'Value of pi', options: [], answer: 3.14, tolerance: 0.01, points: 3, order_index: 2, is_latest: 1, time_limit_seconds: null, allow_assumptions: 0, grading_mode: 'normal', accept_also: [], bonus: 0, created_at: ''
     };
     assert.ok(isAnswerCorrect(qNum, 3.1415));
     assert.ok(isAnswerCorrect(qNum, 3.135));
@@ -129,7 +130,7 @@ describe('Interval E2E Verification & Test Suite', () => {
 
     const qShort: Question = {
       id: 4, quiz_version_id: 1, version: 1, qtype: 'short',
-      text: 'Capital of India', options: [], answer: 'New Delhi', tolerance: null, points: 1, order_index: 3, is_latest: 1, created_at: ''
+      text: 'Capital of India', options: [], answer: 'New Delhi', tolerance: null, points: 1, order_index: 3, is_latest: 1, time_limit_seconds: null, allow_assumptions: 0, grading_mode: 'normal', accept_also: [], bonus: 0, created_at: ''
     };
     assert.ok(isAnswerCorrect(qShort, 'new delhi'));
     assert.ok(isAnswerCorrect(qShort, '  NEW DELHI  '));

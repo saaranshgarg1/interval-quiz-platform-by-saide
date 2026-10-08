@@ -12,8 +12,11 @@ import {
   Clock,
   Eye,
   Lock,
+  Radio,
+  ShieldAlert,
   User,
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { api, ApiError } from '../api';
 import type { Incident, Audit } from '../types';
 import { useCourses, useAudit, qk } from '../lib/queries';
@@ -32,6 +35,9 @@ import {
   AlertDialogCancel,
 } from '../components/ui/alert-dialog';
 import { Skeleton } from '../components/ui/skeleton';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import { Textarea } from '../components/ui/textarea';
 
 /**
  * IncidentsPage — instructor/staff view of flagged/locked/expired attempts.
@@ -56,7 +62,11 @@ function statusBadge(status: string): { variant: 'default' | 'secondary' | 'succ
     case 'under_review':
       return { variant: 'warning', icon: <AlertTriangle className="size-3" aria-hidden="true" />, label: 'Under review' };
     case 'expired':
-      return { variant: 'warning', icon: <Clock className="size-3" aria-hidden="true" />, label: 'Expired' };
+      return { variant: 'warning', icon: <Clock className="size-3" aria-hidden="true" />, label: 'Timed out' };
+    case 'submitted':
+      return { variant: 'success', icon: <Clock className="size-3" aria-hidden="true" />, label: 'Submitted' };
+    case 'in_progress':
+      return { variant: 'default', icon: <Clock className="size-3" aria-hidden="true" />, label: 'Writing' };
     default:
       return { variant: 'secondary', icon: <AlertTriangle className="size-3" aria-hidden="true" />, label: status };
   }
@@ -69,14 +79,30 @@ const columns: ColumnDef<Incident>[] = [
     cell: ({ row }) => <span className="font-medium text-foreground">{row.getValue('quiz_title')}</span>,
   },
   {
-    accessorKey: 'user_id',
+    accessorKey: 'user_name',
     header: 'Student',
     cell: ({ row }) => (
-      <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-        <User className="size-3" aria-hidden="true" />
-        #{row.getValue('user_id')}
+      <span className="inline-flex flex-col">
+        <span className="inline-flex items-center gap-1.5 text-foreground">
+          <User className="size-3" aria-hidden="true" />
+          {row.original.user_name}
+        </span>
+        <span className="font-mono text-xs text-muted-foreground">{row.original.entry_number ?? row.original.user_email}</span>
       </span>
     ),
+  },
+  {
+    accessorKey: 'violation_count',
+    header: 'Violations',
+    cell: ({ row }) =>
+      row.original.violation_count > 0 ? (
+        <Badge variant="warning" className="inline-flex items-center gap-1">
+          <ShieldAlert className="size-3" aria-hidden="true" />
+          {row.original.violation_count}
+        </Badge>
+      ) : (
+        <span className="text-muted-foreground">0</span>
+      ),
   },
   {
     accessorKey: 'status',
@@ -182,15 +208,9 @@ export function IncidentsPage() {
     navigate(`/incidents/attempt/${id}`, { replace: true });
   };
 
-  const handleDecide = async (attemptId: number, decision: Decision) => {
-    let reason: string | null = null;
-    if (decision === 'reinstate') {
-      const r = window.prompt('Reason for reinstating (shown in the audit trail).', 'Authorized re-entry after review');
-      if (r === null) return; // cancelled
-      reason = r.trim() || null;
-    }
+  const handleDecide = async (attemptId: number, decision: Decision, reason: string | null, minutes: number | null) => {
     try {
-      await api.post<unknown>(`/review/attempt/${attemptId}`, { decision, reason });
+      await api.post<unknown>(`/review/attempt/${attemptId}`, { decision, reason, minutes });
       toast.success(`Decision "${decision}" recorded.`);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: qk.courses() }),
@@ -207,7 +227,7 @@ export function IncidentsPage() {
   return (
     <Page
       title="Incidents & review"
-      description="Attempts locked by the strict policy or finalized when a deadline passed. Review the recorded events and saved answers before deciding."
+      description="Locked attempts and attempts with recorded violations. Review the recorded events and every saved answer change before deciding."
       width="wide"
     >
       <div className="space-y-6">
@@ -234,7 +254,7 @@ export function IncidentsPage() {
             <EmptyState
               icon={AlertTriangle}
               title="No incidents right now"
-              description="Locked, expired, or under-review attempts will appear here."
+              description="Locked attempts and attempts with recorded violations appear here."
             />
           )}
 
@@ -268,7 +288,7 @@ export function IncidentsPage() {
           {selectedId && !auditError && auditFetching && <AuditSkeleton />}
 
           {selectedId && !auditError && audit && (
-            <AuditPanel audit={audit} onDecide={(d) => void handleDecide(audit.attempt.id, d)} />
+            <AuditPanel audit={audit} onDecide={(d, reason, minutes) => void handleDecide(audit.attempt.id, d, reason, minutes)} />
           )}
         </section>
       </div>
@@ -292,6 +312,8 @@ function IncidentsTable({
     data: rows,
     columns,
     getCoreRowModel: getCoreRowModel(),
+    // Key rows by attempt id so selecting a row opens that attempt (not the row index).
+    getRowId: (r) => String(r.attempt_id),
     enableRowSelection: true,
     onRowSelectionChange: (updater) => {
       const next = typeof updater === 'function' ? updater(selectedId ? { [selectedId]: true } : {}) : updater;
@@ -367,7 +389,7 @@ function AuditSkeleton() {
 
 interface AuditPanelProps {
   audit: Audit;
-  onDecide: (decision: Decision) => void;
+  onDecide: (decision: Decision, reason: string | null, minutes: number | null) => void;
 }
 
 function AuditPanel({ audit, onDecide }: AuditPanelProps) {
@@ -394,6 +416,20 @@ function AuditPanel({ audit, onDecide }: AuditPanelProps) {
         <code className="mono">{attempt.receipt ?? '—'}</code>
         <br />
         Started <TimeCell value={attempt.started_at} /> · Expiry <TimeCell value={attempt.expires_at} />
+        <br />
+        Violations: <strong className="text-foreground">{attempt.violation_count}</strong> · Resumes: {attempt.resume_count} · IP{' '}
+        <code className="mono">{attempt.start_ip ?? '—'}</code>
+        {attempt.last_ip && attempt.last_ip !== attempt.start_ip ? (
+          <>
+            {' '}→ <code className="mono">{attempt.last_ip}</code>
+          </>
+        ) : null}
+        {attempt.extra_seconds > 0 ? ` · +${Math.round(attempt.extra_seconds / 60)} min extra` : ''}
+        <br />
+        Answer changes recorded: {audit.history.length}
+        <Link to={`/quizzes/${attempt.quiz_id}/monitor`} className="ml-3 inline-flex items-center gap-1 text-primary hover:underline">
+          <Radio className="size-3" aria-hidden="true" /> Live monitor
+        </Link>
       </p>
 
       <section>
@@ -482,14 +518,20 @@ function AuditPanel({ audit, onDecide }: AuditPanelProps) {
  * Decision buttons. Each destructive/confirm action is wrapped in an AlertDialog
  * so the ruling is intentional. `reinstate` additionally prompts for a reason.
  */
-function RulingActions({ onDecide }: { onDecide: (d: Decision) => void }) {
+function RulingActions({ onDecide }: { onDecide: (d: Decision, reason: string | null, minutes: number | null) => void }) {
   const [pending, setPending] = useState<Decision | null>(null);
+  const [reason, setReason] = useState('');
+  const [minutes, setMinutes] = useState('');
 
-  const trigger = (d: Decision) => setPending(d);
+  const trigger = (d: Decision) => {
+    setPending(d);
+    setReason(d === 'reinstate' ? 'Authorized re-entry after review' : '');
+    setMinutes('');
+  };
 
   const confirm = () => {
     if (pending) {
-      onDecide(pending);
+      onDecide(pending, reason.trim() || null, pending === 'reinstate' && minutes !== '' ? Number(minutes) : null);
       setPending(null);
     }
   };
@@ -520,6 +562,18 @@ function RulingActions({ onDecide }: { onDecide: (d: Decision) => void }) {
                   : 'The attempt will remain locked. This cannot be undone.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <div className="space-y-3">
+            {pending === 'reinstate' && (
+              <div>
+                <Label htmlFor="ruling-minutes">Extra minutes (optional — for time lost while locked)</Label>
+                <Input id="ruling-minutes" type="number" min={0} max={600} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
+              </div>
+            )}
+            <div>
+              <Label htmlFor="ruling-reason">Reason (recorded in the audit trail)</Label>
+              <Textarea id="ruling-reason" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />
+            </div>
+          </div>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction

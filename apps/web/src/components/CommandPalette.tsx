@@ -45,7 +45,7 @@ function useSearchableQuizzes(enabled: boolean) {
 export function CommandPalette() {
   const [open, setOpen] = React.useState(false);
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const { theme, toggle } = useTheme();
 
   React.useEffect(() => {
@@ -122,10 +122,8 @@ export function CommandPalette() {
           </CommandItem>
           <CommandItem
             onSelect={() =>
-              run(() => {
-                logout();
-                navigate('/login');
-              })
+              // Same confirmation as the top-bar button (owned by the layout).
+              run(() => window.dispatchEvent(new Event('interval:request-sign-out')))
             }
           >
             <LogOut /> Sign out

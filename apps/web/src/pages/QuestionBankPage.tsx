@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/api';
 import { qk, useBanks, useBank } from '@/lib/queries';
-import type { QuestionBank, BankQuestion, QuestionType } from '@/types';
+import type { QuestionBank, BankQuestion, QuestionType, Difficulty } from '@/types';
 import { toast } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
 import { Page, EmptyState, ErrorState, LoadingSkeleton } from '@/components/primitives';
@@ -57,7 +57,11 @@ const questionBase = {
   text: z.string().min(1, 'Question text is required'),
   points: z.coerce.number().min(0.5, 'Must be at least 0.5').max(100),
   tags: z.string().optional(),
+  difficulty: z.enum(['easy', 'medium', 'hard']),
 };
+
+export const DIFFICULTY_LABEL: Record<Difficulty, string> = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
+const difficultyVariant = (d: Difficulty) => (d === 'hard' ? 'destructive' : d === 'easy' ? 'success' : 'warning');
 
 const singleMultipleSchema = z.object({
   ...questionBase,
@@ -126,6 +130,15 @@ const columns: ColumnDef<BankQuestion>[] = [
     header: 'Points',
     cell: ({ getValue }) => getValue<number>(),
     size: 80,
+  },
+  {
+    accessorKey: 'difficulty',
+    header: 'Difficulty',
+    cell: ({ getValue }) => {
+      const d = getValue<Difficulty>() ?? 'medium';
+      return <Badge variant={difficultyVariant(d)}>{DIFFICULTY_LABEL[d]}</Badge>;
+    },
+    size: 100,
   },
   {
     accessorKey: 'tags',
@@ -259,6 +272,7 @@ function NewQuestionForm({
       points: 1,
       tolerance: 0.01,
       tags: '',
+      difficulty: 'medium',
     },
   });
 
@@ -302,6 +316,7 @@ function NewQuestionForm({
         answer: finalAnswer,
         tolerance: qtype === 'numeric' ? data.tolerance : null,
         points: data.points,
+        difficulty: data.difficulty,
         tags: data.tags
           ? data.tags
               .split(',')
@@ -444,14 +459,28 @@ function NewQuestionForm({
             </div>
           )}
 
-          <div>
-            <Label htmlFor="tags">Tags (comma-separated)</Label>
-            <Input
-              id="tags"
-              placeholder="e.g. calculus, integrals, easy"
-              {...register('tags')}
-            />
+          <div className="grid grid-cols-[1fr_2fr] gap-4">
+            <div>
+              <Label htmlFor="difficulty">Difficulty</Label>
+              <select
+                id="difficulty"
+                {...register('difficulty')}
+                className="w-full rounded-[var(--radius-md)] border border-[var(--line-strong)] bg-card px-3 py-2 text-sm focus:outline-none focus:ring-[3px] focus:ring-ring/40"
+              >
+                <option value="easy">Easy</option>
+                <option value="medium">Medium</option>
+                <option value="hard">Hard</option>
+              </select>
+            </div>
+            <div>
+              <Label htmlFor="tags">Tags (comma-separated)</Label>
+              <Input id="tags" placeholder="e.g. calculus, integrals, unit-2" {...register('tags')} />
+            </div>
           </div>
+          <p className="-mt-2 text-xs text-muted-foreground">
+            Quizzes can draw a random question of a given difficulty (and tag) from this bank, so each student gets a
+            different question of the same level.
+          </p>
 
           <DialogFooter>
             <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>
@@ -565,11 +594,16 @@ function QuestionsTable({ questions, onDelete }: QuestionsTableProps) {
     return result;
   }, [questions, globalFilter]);
 
+  const [difficultyFilter, setDifficultyFilter] = useState<'all' | Difficulty>('all');
+  const shown = useMemo(
+    () => (difficultyFilter === 'all' ? filtered : filtered.filter((q) => (q.difficulty ?? 'medium') === difficultyFilter)),
+    [filtered, difficultyFilter],
+  );
   const typeFilter = columnFilters.find((f) => f.id === 'qtype');
   const typeValue = (typeFilter?.value as string) ?? 'all';
 
   const table = useReactTable({
-    data: filtered,
+    data: shown,
     columns: [
       ...columns,
       {
@@ -631,6 +665,17 @@ function QuestionsTable({ questions, onDelete }: QuestionsTableProps) {
             <option value="multiple">Multiple Choice</option>
             <option value="short">Short Answer</option>
             <option value="numeric">Numeric</option>
+          </select>
+          <select
+            value={difficultyFilter}
+            onChange={(e) => setDifficultyFilter(e.target.value as 'all' | Difficulty)}
+            aria-label="Filter by difficulty"
+            className="rounded-[var(--radius-md)] border border-[var(--line-strong)] bg-card px-3 py-2 text-sm focus:outline-none focus:ring-[3px] focus:ring-ring/40"
+          >
+            <option value="all">All difficulties</option>
+            <option value="easy">Easy ({questions.filter((q) => q.difficulty === 'easy').length})</option>
+            <option value="medium">Medium ({questions.filter((q) => (q.difficulty ?? 'medium') === 'medium').length})</option>
+            <option value="hard">Hard ({questions.filter((q) => q.difficulty === 'hard').length})</option>
           </select>
         </div>
       </div>

@@ -214,6 +214,29 @@ No platform-role management endpoints exist today. Add, all `requireRoles('admin
 | PATCH  | `/users/:id/role`           | set global role (`student`/`instructor`/`admin`) — the only way to mint an instructor/admin |
 | GET    | `/audit`                    | read the audit log (§5) |
 
+### 3.10a `/api/proctor` — live exam control (all `requireAuth`)
+
+TAs invigilate (watch, message, flag); everything that changes a student's time or outcome is an
+instructor-only exam-fairness control, consistent with accommodations and rulings above.
+
+| Method | Path                                   | Student | TA | Instructor | Admin | Gate |
+|--------|----------------------------------------|:-------:|:--:|:----------:|:-----:|------|
+| GET    | `/live`                                | (empty) | ✅ | ✅         | ✅ all | courses where caller is staff |
+| GET    | `/quiz/:quizId`                        | ❌      | ✅ | ✅         | ✅    | `courseStaff` — monitor snapshot |
+| GET    | `/quiz/:quizId/events`                 | ❌      | ✅ | ✅         | ✅    | `courseStaff` — activity feed |
+| GET    | `/quiz/:quizId/flags`                  | ❌      | ✅ | ✅         | ✅    | `courseStaff` — flagged candidates |
+| POST   | `/quiz/:quizId/resolve`                | ❌      | ✅ | ✅         | ✅    | `courseStaff` — preview entry numbers |
+| POST   | `/quiz/:quizId/announce`               | ❌      | ✅ | ✅         | ✅    | `courseStaff` |
+| POST   | `/attempt/:attemptId/flags`            | ❌      | ✅ | ✅         | ✅    | `courseStaff` — invigilator flag |
+| POST   | `/flags/:flagId/resolve`               | ❌      | ❌ | ✅         | ✅    | `courseInstructor` |
+| POST   | `/quiz/:quizId/extend`                 | ❌      | ❌ | ✅         | ✅    | `courseInstructor` |
+| POST   | `/quiz/:quizId/pause` · `/resume`      | ❌      | ❌ | ✅         | ✅    | `courseInstructor` |
+| POST   | `/quiz/:quizId/close` · `/reopen`      | ❌      | ❌ | ✅         | ✅    | `courseInstructor` |
+| POST   | `/attempt/:attemptId/action`           | ❌      | ❌ | ✅         | ✅    | `courseInstructor` — lock, reinstate, force_submit, allow_reentry, reset_session, reset_violations |
+
+Student attempt endpoints (`/api/attempts/:id/*`) additionally require the per-attempt
+`X-Attempt-Session` token: ownership alone is not enough, only the one window holding the attempt may act on it.
+
 ### 3.11 `/api/health`
 
 Public, unauthenticated, no data. Leave open.

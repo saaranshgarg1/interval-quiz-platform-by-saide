@@ -12,6 +12,8 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { useAnalytics } from '../lib/queries';
+import { downloadFile } from '../api';
+import { toast } from '@/components/ui/sonner';
 import type { QuestionAnalyticsItem, SubmissionItem, ScoreBucket } from '../types';
 import { formatDateTime, statusLabel } from '../components/ui';
 import { Page, EmptyState, ErrorState, LoadingSkeleton } from '../components/primitives';
@@ -221,7 +223,13 @@ const submissionColumns: ColumnDef<SubmissionItem>[] = [
       return (
         <div>
           <div className="font-medium">{s.user_name}</div>
-          <div className="text-sm text-muted-foreground">{s.user_email}</div>
+          <div className="text-sm text-muted-foreground">
+            {s.entry_number ? <span className="mr-2 font-mono">{s.entry_number}</span> : null}
+            {s.user_email}
+          </div>
+          {s.violation_count > 0 && (
+            <div className="text-xs text-warning">{s.violation_count} violation(s)</div>
+          )}
         </div>
       );
     },
@@ -341,29 +349,14 @@ export const AnalyticsPage: React.FC = () => {
     enableSorting: false,
   });
 
-  // ── CSV export (local, no shared deps) ──────────────────────────────
+  // ── CSV export: the server gradebook (entry numbers, per-question marks,
+  // absent students, violations; formula-injection safe). Instructor only.
   const exportSubmissionsCsv = () => {
-    if (!analytics?.submissions?.length) return;
-    const headers = ['Attempt ID', 'Student Name', 'Student Email', 'Status', 'Score', 'Max Score', 'Started At', 'Submitted At', 'Receipt'];
-    const rows = analytics.submissions.map((s) => [
-      s.attempt_id,
-      `"${s.user_name.replace(/"/g, '""')}"`,
-      s.user_email,
-      s.status,
-      s.score ?? '',
-      s.max_score ?? '',
-      s.started_at,
-      s.submitted_at ?? '',
-      s.receipt ?? '',
-    ]);
-    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${analytics.title.replace(/\s+/g, '_')}_submissions.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    if (!analytics) return;
+    void downloadFile(
+      `/results/quiz/${analytics.quiz_version_id}/export.csv`,
+      `${analytics.title.replace(/[^\w-]+/g, '_')}-gradebook.csv`,
+    ).catch((err) => toast.error(err instanceof Error ? err.message : 'Download failed.'));
   };
 
   // ── loading ──────────────────────────────────────────────────────────
@@ -465,7 +458,10 @@ export const AnalyticsPage: React.FC = () => {
             disabled={!analytics.submissions?.length}
           >
             <Download className="size-4" />
-            Export CSV
+            Gradebook CSV
+          </Button>
+          <Button asChild variant="secondary" size="sm">
+            <Link to={`/quizzes/${analytics.quiz_id}/monitor`}>Live monitor</Link>
           </Button>
           <Button variant="secondary" size="sm" onClick={() => navigate(-1)}>
             <ArrowLeft className="size-4" />

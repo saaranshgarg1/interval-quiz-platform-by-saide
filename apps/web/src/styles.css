@@ -221,6 +221,13 @@
     width: 100%;
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
   }
+  input[type='checkbox'],
+  input[type='radio'] {
+    width: auto;
+    padding: 0;
+    flex-shrink: 0;
+    accent-color: var(--primary);
+  }
   input::placeholder,
   textarea::placeholder {
     color: var(--muted-foreground);
@@ -1007,5 +1014,39 @@ table.tbl {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---- exam mode ---- */
+.exam-watermark {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-repeat: repeat;
+}
+.exam-watermark ~ * {
+  position: relative;
+  z-index: 1;
+}
+/* Copy & paste disabled: question text cannot be selected (inputs stay editable). */
+.exam-protected {
+  -webkit-user-select: none;
+  user-select: none;
+}
+.exam-protected input,
+.exam-protected textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+@media print {
+  .exam-protected {
+    display: none !important;
+  }
+  body:has(.exam-protected)::before {
+    content: 'Printing is disabled during this quiz.';
+    display: block;
+    padding: 2rem;
+    font: 600 1.25rem sans-serif;
   }
 }

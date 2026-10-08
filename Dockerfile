@@ -26,6 +26,8 @@ RUN corepack enable
 ENV NODE_ENV=production
 ENV PORT=4000
 ENV INTERVAL_DATA_DIR=/app/data
+# More libuv threads so a whole class signing in at once hashes passwords in parallel.
+ENV UV_THREADPOOL_SIZE=16
 
 # Copy manifests and install production dependencies only
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -43,4 +45,7 @@ EXPOSE 4000
 # Create persistent data directory
 RUN mkdir -p /app/data
 
+HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+# One process serves the API and the built web app (SQLite: run a single instance).
 CMD ["node", "apps/api/dist/server.js"]

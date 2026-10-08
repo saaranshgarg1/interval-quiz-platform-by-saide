@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { requireAuth, AppError } from '../auth.js';
 import { db } from '../db.js';
-import { courseRepo, userRepo, pubUser } from '../repo.js';
+import { courseRepo, userRepo, pubUser, pendingEnrollmentRepo } from '../repo.js';
 import type { Course } from '../types.js';
+import { normalizeEntryNumber } from '../util.js';
 import type { AuthedRequest } from '../auth.js';
 import { assertInstructor, assertStaff, writeAudit } from '../authz.js';
 
@@ -73,31 +74,90 @@ coursesRouter.put('/:courseId/members', (req: AuthedRequest, res) => {
   res.json({ ok: true, member: { ...pubUser(user), role: desiredRole } });
 });
 
-// Bulk-enroll a list of emails (item 12). Reports emails with no account.
+interface EnrollEntry {
+  email: string;
+  entry_number: string | null;
+  name: string | null;
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Parse a class list. Each line is either several emails ("a@x, b@y") or one
+ * student as "email, entry number[, name]" (e.g. a CSV export from the registrar).
+ */
+function parseClassList(raw: unknown): { entries: EnrollEntry[]; invalid: string[] } {
+  const entries: EnrollEntry[] = [];
+  const invalid: string[] = [];
+  const lines = Array.isArray(raw)
+    ? raw.map((e) => String(e))
+    : typeof raw === 'string'
+      ? raw.split(/\r?\n/)
+      : null;
+  if (!lines) throw new AppError(400, 'Provide a list of emails to enroll.');
+  for (const line of lines) {
+    const fields = line
+      .split(/[,;\t]+/)
+      .map((f) => f.trim())
+      .filter(Boolean);
+    if (fields.length === 0) continue;
+    if (fields.every((f) => f.includes('@'))) {
+      for (const f of fields) {
+        if (EMAIL_RE.test(f)) entries.push({ email: f, entry_number: null, name: null });
+        else invalid.push(f);
+      }
+      continue;
+    }
+    const [email, entry, ...nameParts] = fields;
+    if (!email || !EMAIL_RE.test(email)) {
+      invalid.push(line.trim());
+      continue;
+    }
+    let entryNumber: string | null;
+    try {
+      entryNumber = normalizeEntryNumber(entry);
+    } catch {
+      invalid.push(line.trim());
+      continue;
+    }
+    entries.push({ email, entry_number: entryNumber, name: nameParts.join(' ') || null });
+  }
+  return { entries, invalid };
+}
+
+// Bulk-enroll a class list (item 12). Unknown emails become pending enrollments
+// that are claimed automatically when the person registers or signs in with SSO.
 coursesRouter.post('/:courseId/members/bulk', (req: AuthedRequest, res) => {
   const { course } = withCourseRole(req, Number(req.params.courseId));
   assertInstructor(req, course.id);
   const body = req.body ?? {};
   const memberRole = body.memberRole === 'ta' || body.memberRole === 'instructor' ? body.memberRole : 'student';
-  // Accept either an array of emails or a newline/comma-separated string.
-  let emails: string[];
-  if (Array.isArray(body.emails)) {
-    emails = body.emails.map((e: unknown) => String(e));
-  } else if (typeof body.emails === 'string') {
-    emails = body.emails.split(/[\n,;]+/);
-  } else {
-    throw new AppError(400, 'Provide a list of emails to enroll.');
-  }
-  emails = emails.map((e) => e.trim()).filter(Boolean);
-  if (emails.length === 0) throw new AppError(400, 'Provide at least one email to enroll.');
-  const result = courseRepo.bulkEnroll(course.id, emails, memberRole);
+  const { entries, invalid } = parseClassList(body.entries ?? body.emails);
+  if (entries.length === 0) throw new AppError(400, 'Provide at least one email to enroll.');
+  if (entries.length > 5000) throw new AppError(400, 'Enroll at most 5000 people at a time.');
+  const result = courseRepo.bulkEnroll(course.id, entries, memberRole, req.userId as number);
   writeAudit(req, {
     action: 'course.member.bulk_enroll',
     course_id: course.id,
     target: 'course:' + course.id,
-    after: { enrolled: result.enrolled.length, not_found: result.not_found },
+    after: { enrolled: result.enrolled.length, pending: result.pending.length, invalid },
   });
-  res.json(result);
+  res.json({ ...result, invalid });
+});
+
+/** Invitations waiting for the person to create an account or sign in with SSO. */
+coursesRouter.get('/:courseId/pending', (req: AuthedRequest, res) => {
+  const { course } = withCourseRole(req, Number(req.params.courseId));
+  assertStaff(req, course.id);
+  res.json({ pending: pendingEnrollmentRepo.listForCourse(course.id) });
+});
+
+coursesRouter.delete('/:courseId/pending/:pendingId', (req: AuthedRequest, res) => {
+  const { course } = withCourseRole(req, Number(req.params.courseId));
+  assertInstructor(req, course.id);
+  pendingEnrollmentRepo.remove(course.id, Number(req.params.pendingId));
+  writeAudit(req, { action: 'course.pending.remove', course_id: course.id, target: 'pending:' + req.params.pendingId });
+  res.json({ ok: true });
 });
 
 coursesRouter.delete('/:courseId/members/:userId', (req: AuthedRequest, res) => {
