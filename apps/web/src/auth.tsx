@@ -34,10 +34,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const res = await api.get<{ user: User }>('/auth/me');
       setUser(res.user);
-    } catch {
-      setToken(null);
-      setTok(null);
-      setUser(null);
+    } catch (err) {
+      // Only wipe the session on a real auth rejection. An aborted fetch
+      // (StrictMode remount, in-flight navigation, Playwright page.goto) or a
+      // transient network blip must NOT clear the token — that was bouncing
+      // logged-in users to /login on deep links (Lab 9 Task 1 open-editor).
+      const status = err && typeof err === 'object' && 'status' in err ? (err as { status: number }).status : 0;
+      const aborted =
+        (err instanceof DOMException && err.name === 'AbortError') ||
+        (err instanceof Error && /abort|AbortError|Failed to fetch|NetworkError/i.test(err.message));
+      if (aborted) return;
+      if (status === 401 || status === 403) {
+        setToken(null);
+        setTok(null);
+        setUser(null);
+      }
+      // other errors (5xx, parse): leave the token; Shell stays on "Restoring…"
+      // only until ready flips — user may still be null and get sent to /login,
+      // but at least a retry on the next mount can recover.
     }
   }, []);
 
@@ -45,6 +59,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // then flip `ready` so route guards can safely act on the resolved state.
   useEffect(() => {
     let cancelled = false;
+    // Token present → not ready until /auth/me resolves (or we give up).
+    // Token absent → ready immediately so anonymous routes render.
+    if (getToken()) setReady(false);
     void (async () => {
       await refresh();
       if (!cancelled) setReady(true);
@@ -59,6 +76,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(res.token);
     setTok(res.token);
     setUser(res.user);
+    // Login happens on a mount that started with no token (ready was already
+    // true). Keep ready true; user is set synchronously above.
+    setReady(true);
     return res.user;
   }, []);
 
@@ -73,6 +93,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setToken(res.token);
       setTok(res.token);
       setUser(res.user);
+      setReady(true);
       return res.user;
     },
     [],
@@ -83,6 +104,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(res.token);
     setTok(res.token);
     setUser(res.user);
+    setReady(true);
     return res.user;
   }, []);
 

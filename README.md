@@ -185,6 +185,7 @@ review flow can be demonstrated immediately.
 - **Lab 6: Build** — [`docs/lab6/implementation.md`](docs/lab6/implementation.md) · [`docs/lab6/debugging.md`](docs/lab6/debugging.md).
 - **Lab 7: Test** — [`docs/lab7/testing.md`](docs/lab7/testing.md) (automated suite) · [`docs/lab7/report.md`](docs/lab7/report.md) (usability evaluation, P0/P1/P2 findings).
 - **Lab 8: Improve** — [`docs/lab8/improvements.md`](docs/lab8/improvements.md) (Lab 7 P0/P1 fixes, deeper defects found, Chromium E2E regression suite).
+- **Lab 9: Validate** — [`docs/lab9/report.md`](docs/lab9/report.md) (validation report: both tasks 0% → 100%, all four targets MET) · [`docs/lab9/Lab9_Validation_Report.pdf`](docs/lab9/Lab9_Validation_Report.pdf) (PDF) · [`docs/lab9/evaluation-plan.md`](docs/lab9/evaluation-plan.md) (methods + targets) · [`docs/lab9/inspection-findings.md`](docs/lab9/inspection-findings.md) (heuristics, walkthrough, a11y) · [`docs/lab9/viva-notes.md`](docs/lab9/viva-notes.md) (viva prep).
 
 ### Lab 8 improvement set (instructor experience)
 

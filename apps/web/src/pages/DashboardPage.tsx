@@ -197,7 +197,10 @@ export function DashboardPage() {
                     </CardHeader>
                     <CardContent className="flex flex-col gap-3 flex-1">
                       {c.loadError ? (
-                        <div className="text-sm text-destructive bg-destructive/10 rounded-md p-2">
+                        <div
+                          role="alert"
+                          className="text-sm text-destructive bg-destructive/10 rounded-md p-2"
+                        >
                           Couldn't load quizzes: {c.loadError}
                         </div>
                       ) : published(c).length === 0 && drafts(c).length === 0 ? (
