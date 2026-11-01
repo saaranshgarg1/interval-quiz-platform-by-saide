@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../api';
 import type {
@@ -48,7 +48,7 @@ const EMPTY_QUESTION = () => ({
   options: ['', ''],
   answer: 0 as number | number[] | string,
   tolerance: '0.01',
-  points: 1,
+  points: '1' as string,
   time_limit_seconds: '' as string,
   allow_assumptions: false,
   id: null as number | null,
@@ -97,6 +97,9 @@ export function QuizEditorPage() {
   const [selectedBankId, setSelectedBankId] = useState<number | ''>('');
   const [bankQuestions, setBankQuestions] = useState<BankQuestion[]>([]);
   const [importingBank, setImportingBank] = useState(false);
+  const [loadingBank, setLoadingBank] = useState(false);
+  const [bankError, setBankError] = useState<string | null>(null);
+  const bankRequest = useRef(0);
 
   // Answer key editing for published questions
   const [answerEdits, setAnswerEdits] = useState<Record<number, { answer: number | number[] | string; tolerance?: string }>>({});
@@ -132,8 +135,7 @@ export function QuizEditorPage() {
   const published = detail?.versions.find((v) => v.status === 'published');
   const editable = !!draft;
 
-  if (error) return <div className="banner error">{error}</div>;
-  if (!detail) return <p className="muted">Loading quiz…</p>;
+  if (!detail) return error ? <div className="banner error" role="alert">{error}</div> : <p className="muted">Loading quiz…</p>;
 
   const saveMeta = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -203,6 +205,7 @@ export function QuizEditorPage() {
   const saveNewQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!draft) return;
+    setError(null);
     try {
       const res = await api.post<{ question: QuestionEditor }>(`/quizzes/${quizId}/questions`, buildQuestionPayload(newQ));
       setNewQ(EMPTY_QUESTION());
@@ -225,6 +228,7 @@ export function QuizEditorPage() {
   const saveEdit = async (q: QuestionEditor) => {
     const payload = edits[q.id];
     if (!payload) return;
+    setError(null);
     try {
       const res = await api.put<{ question: QuestionEditor }>(`/quizzes/questions/${q.id}`, buildQuestionPayload(payload));
       setEdits((prev) => {
@@ -274,10 +278,11 @@ export function QuizEditorPage() {
   const saveAnswerKey = async (q: QuestionEditor) => {
     const edit = answerEdits[q.id];
     if (!edit) return;
+    setError(null);
     try {
       // Regrades every submitted paper with the corrected key.
       const res = await api.post<{ regraded: number; changed: number }>(`/insights/questions/${q.id}/regrade`, {
-        answer: q.qtype === 'numeric' ? Number(edit.answer) : edit.answer,
+        answer: edit.answer,
         tolerance: edit.tolerance !== undefined ? (edit.tolerance === '' ? 0 : Number(edit.tolerance)) : undefined,
       });
       setAnswerEdits((prev) => {
@@ -297,22 +302,37 @@ export function QuizEditorPage() {
   };
 
   const openBankModal = async () => {
+    const request = ++bankRequest.current;
+    setShowBankModal(true);
+    setBanks([]);
+    setSelectedBankId('');
+    setBankQuestions([]);
+    setBankError(null);
+    setLoadingBank(true);
     try {
-      setShowBankModal(true);
       const res = await api.get<{ banks: QuestionBank[] }>(`/banks/course/${detail.course_id}`);
-      setBanks(res.banks);
+      if (request === bankRequest.current) setBanks(res.banks);
     } catch (err) {
-      setError('Failed to load course question banks.');
+      if (request === bankRequest.current) setBankError('Failed to load course question banks.');
+    } finally {
+      if (request === bankRequest.current) setLoadingBank(false);
     }
   };
 
-  const handleSelectBank = async (bId: number) => {
+  const handleSelectBank = async (bId: number | '') => {
+    const request = ++bankRequest.current;
     setSelectedBankId(bId);
+    setBankQuestions([]);
+    setBankError(null);
+    setLoadingBank(bId !== '');
+    if (bId === '') return;
     try {
       const res = await api.get<{ questions: BankQuestion[] }>(`/banks/${bId}`);
-      setBankQuestions(res.questions);
+      if (request === bankRequest.current) setBankQuestions(res.questions);
     } catch (err) {
-      setError('Failed to load bank questions.');
+      if (request === bankRequest.current) setBankError('Failed to load bank questions. Choose the bank again to retry.');
+    } finally {
+      if (request === bankRequest.current) setLoadingBank(false);
     }
   };
 
@@ -322,6 +342,7 @@ export function QuizEditorPage() {
 
   const importBankQuestion = async (bq: BankQuestion) => {
     if (!draft) return;
+    setError(null);
     try {
       setImportingBank(true);
       const res = await api.post<{ question: QuestionEditor }>(`/quizzes/${quizId}/questions`, {
@@ -331,6 +352,7 @@ export function QuizEditorPage() {
         answer: bq.answer,
         tolerance: bq.tolerance,
         points: bq.points,
+        allow_assumptions: Boolean(bq.allow_assumptions),
       });
       toast.success(`Imported question into draft`);
       setDetail((prev) =>
@@ -430,8 +452,15 @@ export function QuizEditorPage() {
       }
       width="wide"
     >
+      {error && <div className="banner error" role="alert">{error}</div>}
 
-      <Dialog open={showBankModal} onOpenChange={setShowBankModal}>
+      <Dialog open={showBankModal} onOpenChange={(open) => {
+        setShowBankModal(open);
+        if (!open) {
+          ++bankRequest.current;
+          setLoadingBank(false);
+        }
+      }}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Add questions from a bank</DialogTitle>
@@ -442,7 +471,7 @@ export function QuizEditorPage() {
               <select
                 id="bank-select"
                 value={selectedBankId}
-                onChange={(e) => void handleSelectBank(Number(e.target.value))}
+                onChange={(e) => void handleSelectBank(e.target.value === '' ? '' : Number(e.target.value))}
                 className="mt-1 block w-full rounded-[var(--radius-md)] border border-[var(--line-strong)] bg-card px-3 py-2 text-sm focus:outline-none focus:ring-[3px] focus:ring-ring/40"
               >
                 <option value="">-- Choose a Question Bank --</option>
@@ -453,6 +482,16 @@ export function QuizEditorPage() {
                 ))}
               </select>
             </div>
+
+            {loadingBank && <p role="status" className="text-sm text-muted-foreground">Loading question bank…</p>}
+            {bankError && (
+              <div className="space-y-2">
+                <p role="alert" className="text-sm text-destructive">{bankError}</p>
+                <Button variant="secondary" size="sm" onClick={() => void (selectedBankId === '' ? openBankModal() : handleSelectBank(selectedBankId))}>
+                  Retry bank load
+                </Button>
+              </div>
+            )}
 
             {selectedBankId !== '' && bankQuestions.length > 0 && (
               <RandomFromBank
@@ -943,7 +982,7 @@ function questionToEdit(q: QuestionEditor): ReturnType<typeof EMPTY_QUESTION> {
     options: q.options.length ? q.options : ['', ''],
     answer: q.answer as number | number[] | string,
     tolerance: q.tolerance == null ? '0.01' : String(q.tolerance),
-    points: q.points,
+    points: String(q.points),
     time_limit_seconds: q.time_limit_seconds == null ? '' : String(q.time_limit_seconds),
     allow_assumptions: Boolean(q.allow_assumptions),
     id: q.id,
@@ -954,19 +993,19 @@ function buildQuestionPayload(q: ReturnType<typeof EMPTY_QUESTION>) {
   const body: Record<string, unknown> = {
     qtype: q.qtype,
     text: q.text,
-    points: Number(q.points) || 1,
+    points: q.points,
     time_limit_seconds: q.time_limit_seconds === '' ? null : Number(q.time_limit_seconds),
     allow_assumptions: q.allow_assumptions,
   };
   if (q.qtype === 'single' || q.qtype === 'multiple') {
-    body.options = q.options.filter((o) => o.trim() !== '');
+    body.options = q.options;
   }
   if (q.qtype === 'single') body.answer = Number(q.answer);
   if (q.qtype === 'multiple') {
     body.answer = Array.isArray(q.answer) ? q.answer.map(Number) : [];
   }
   if (q.qtype === 'numeric') {
-    body.answer = Number(q.answer);
+    body.answer = q.answer;
     body.tolerance = q.tolerance === '' ? 0 : Number(q.tolerance);
   }
   if (q.qtype === 'short' || q.qtype === 'descriptive') {
@@ -987,13 +1026,16 @@ function QuestionFields({
   defaultSeconds?: number;
 }) {
   const set = (patch: Partial<ReturnType<typeof EMPTY_QUESTION>>) => setQ({ ...q, ...patch });
+  const prefix = q.id == null ? 'q' : `q-${q.id}`;
+  const fieldId = (name: string) => `${prefix}-${name}`;
+  const correctGroup = q.id == null ? 'correct' : `correct-${q.id}`;
 
   return (
     <div>
       <input type="hidden" />
       <div className="field">
-        <label htmlFor="q-text">Question text (Supports LaTeX e.g. $$x^2$$ and Markdown)</label>
-        <textarea id="q-text" rows={2} value={q.text} onChange={(e) => set({ text: e.target.value })} />
+        <label htmlFor={fieldId('text')}>Question text (Supports LaTeX e.g. $$x^2$$ and Markdown)</label>
+        <textarea id={fieldId('text')} rows={2} value={q.text} onChange={(e) => set({ text: e.target.value })} />
         {q.text && (
           <div style={{ marginTop: '6px', padding: '6px 10px', background: '#f8fafc', borderRadius: '4px', border: '1px dashed #cbd5e1' }}>
             <span style={{ fontSize: '0.7rem', color: '#64748b' }}>Live Preview:</span>
@@ -1003,8 +1045,11 @@ function QuestionFields({
       </div>
       <div className="field-row">
         <div className="field">
-          <label htmlFor="q-type">Type</label>
-          <select id="q-type" value={q.qtype} onChange={(e) => set({ qtype: e.target.value as QuestionType })}>
+          <label htmlFor={fieldId('type')}>Type</label>
+          <select id={fieldId('type')} value={q.qtype} onChange={(e) => {
+            const qtype = e.target.value as QuestionType;
+            set({ qtype, answer: qtype === 'single' ? 0 : qtype === 'multiple' ? [] : '' });
+          }}>
             <option value="single">Single choice</option>
             <option value="multiple">Multiple choice</option>
             <option value="short">Short answer</option>
@@ -1013,14 +1058,14 @@ function QuestionFields({
           </select>
         </div>
         <div className="field">
-          <label htmlFor="q-points">{q.qtype === 'descriptive' ? 'Marks (out of)' : 'Points'}</label>
-          <input id="q-points" type="number" min={0.25} step={0.25} value={q.points} onChange={(e) => set({ points: Number(e.target.value) })} />
+          <label htmlFor={fieldId('points')}>{q.qtype === 'descriptive' ? 'Marks (out of)' : 'Points'}</label>
+          <input id={fieldId('points')} type="number" min={0.25} step={0.25} value={q.points} onChange={(e) => set({ points: e.target.value })} />
         </div>
         {showTimeLimit && (
           <div className="field">
-            <label htmlFor="q-time">Time limit (seconds)</label>
+            <label htmlFor={fieldId('time')}>Time limit (seconds)</label>
             <input
-              id="q-time"
+              id={fieldId('time')}
               type="number"
               min={5}
               max={7200}
@@ -1034,29 +1079,29 @@ function QuestionFields({
 
       {(q.qtype === 'single' || q.qtype === 'multiple') && (
         <div className="field">
-          <label htmlFor="q-options">
+          <label htmlFor={fieldId('options')}>
             Options (one per line). Mark the correct one{q.qtype === 'multiple' ? 's (check ' + (Array.isArray(q.answer) ? (q.answer as unknown[]).length : 0) + ' selected)' : ''}.
           </label>
           <textarea
-            id="q-options"
+            id={fieldId('options')}
             rows={3}
             value={q.options.join('\n')}
             onChange={(e) => {
               const options = e.target.value.split('\n');
               let answer: number | number[] = q.qtype === 'single' ? Number(q.answer) : (Array.isArray(q.answer) ? q.answer.filter((i) => i < options.length) : []);
-              if (q.qtype === 'single' && Number(answer) >= options.filter((o) => o.trim() !== '').length) {
-                answer = 0;
+              if (q.qtype === 'single' && Number(answer) >= options.length) {
+                answer = -1;
               }
               set({ options, answer });
             }}
           />
-          <div style={{ marginTop: '0.5rem' }} role="radiogroup" aria-label="correct options">
+          <div style={{ marginTop: '0.5rem' }} role={q.qtype === 'single' ? 'radiogroup' : 'group'} aria-label="correct options">
             {q.options.map((o, i) =>
               o.trim() === '' ? null : (
                 <label key={i} className="option" style={{ marginTop: '0.35rem' }}>
                   <input
                     type={q.qtype === 'single' ? 'radio' : 'checkbox'}
-                    name="correct"
+                    name={correctGroup}
                     checked={
                       q.qtype === 'single' ? Number(q.answer) === i : Array.isArray(q.answer) && (q.answer as unknown[]).includes(i)
                     }
@@ -1076,28 +1121,28 @@ function QuestionFields({
       {q.qtype === 'numeric' && (
         <div className="field-row">
           <div className="field">
-            <label htmlFor="q-num">Expected number</label>
-            <input id="q-num" type="number" step="any" value={String(q.answer ?? '')} onChange={(e) => set({ answer: e.target.value })} />
+            <label htmlFor={fieldId('num')}>Expected number</label>
+            <input id={fieldId('num')} type="number" step="any" value={String(q.answer ?? '')} onChange={(e) => set({ answer: e.target.value })} />
           </div>
           <div className="field">
-            <label htmlFor="q-tol">Tolerance (±)</label>
-            <input id="q-tol" type="number" step="any" min={0} value={q.tolerance} onChange={(e) => set({ tolerance: e.target.value })} />
+            <label htmlFor={fieldId('tol')}>Tolerance (±)</label>
+            <input id={fieldId('tol')} type="number" step="any" min={0} value={q.tolerance} onChange={(e) => set({ tolerance: e.target.value })} />
           </div>
         </div>
       )}
 
       {q.qtype === 'short' && (
         <div className="field">
-          <label htmlFor="q-short">Accepted answer (case-insensitive)</label>
-          <input id="q-short" value={String(q.answer ?? '')} onChange={(e) => set({ answer: e.target.value })} />
+          <label htmlFor={fieldId('short')}>Accepted answer (case-insensitive)</label>
+          <input id={fieldId('short')} value={String(q.answer ?? '')} onChange={(e) => set({ answer: e.target.value })} />
         </div>
       )}
 
       {q.qtype === 'descriptive' && (
         <div className="field">
-          <label htmlFor="q-guide">Model answer / marking guide (optional — shown to graders, never to students before release)</label>
+          <label htmlFor={fieldId('guide')}>Model answer / marking guide (optional — shown to graders, never to students before release)</label>
           <textarea
-            id="q-guide"
+            id={fieldId('guide')}
             rows={3}
             value={typeof q.answer === 'string' ? q.answer : ''}
             onChange={(e) => set({ answer: e.target.value })}

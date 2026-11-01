@@ -133,6 +133,8 @@ banksRouter.delete('/:bankId/questions/:questionId', (req: AuthedRequest, res) =
   const bank = bankRepo.get(bankId);
   if (!bank) throw new AppError(404, 'Question bank not found.');
   assertStaff(req, bank.course_id);
+  const question = bankRepo.getQuestion(questionId);
+  if (!question || question.bank_id !== bank.id) throw new AppError(404, 'Question not found in this bank.');
 
   bankRepo.deleteQuestion(questionId);
   res.json({ ok: true });

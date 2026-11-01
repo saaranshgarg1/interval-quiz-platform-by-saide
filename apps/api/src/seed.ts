@@ -15,6 +15,10 @@ import { shuffle, nowUtc, addMinutes } from './util.js';
 import { finalize, startAttempt, getAttemptForStudent, saveAnswers, submitAttempt } from './services/attempts.js';
 import { applyPreset, defaultSettings, normalizeSettings } from './services/exam-settings.js';
 
+if (process.env.NODE_ENV === 'production') {
+  throw new Error('Refusing to seed demo accounts in production. Use a controlled administrator bootstrap instead.');
+}
+
 console.log('[seed] seeding Interval demo data…');
 
 function orCreateUser(name: string, email: string, role: 'student' | 'instructor' | 'admin', password: string) {

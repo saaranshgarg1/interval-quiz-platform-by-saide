@@ -25,7 +25,6 @@ import {
   Users,
 } from 'lucide-react';
 import { api, ApiError } from '../api';
-import { useAuth } from '../auth';
 import type { RosterMember, QuizList, VersionDetail, PendingEnrollment } from '../types';
 import { useQuery } from '@tanstack/react-query';
 import { useCourse, useCourseQuizzes, qk } from '../lib/queries';
@@ -127,7 +126,6 @@ function versionBadge(v: { status: string } | null): { variant: 'default' | 'sec
 export function CoursePage() {
   const { courseId } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
   const qc = useQueryClient();
 
   const cid = courseId ? Number(courseId) : NaN;
@@ -137,7 +135,6 @@ export function CoursePage() {
   const [showAccommodations, setShowAccommodations] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<RosterMember | null>(null);
 
-  const isStaff = !!user && user.role !== 'student';
 
   const error = courseError ?? quizzesError;
   const isError = courseIsError || quizzesIsError;
@@ -171,8 +168,10 @@ export function CoursePage() {
       await api.put(`/courses/${cid}/members`, { email: data.email, memberRole: data.memberRole });
       toast.success(`Added ${data.email} as ${data.memberRole}.`);
       void qc.invalidateQueries({ queryKey: qk.course(cid) });
+      return true;
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Adding member failed.');
+      return false;
     }
   };
 
@@ -224,8 +223,10 @@ export function CoursePage() {
       }
       void qc.invalidateQueries({ queryKey: qk.course(cid) });
       void qc.invalidateQueries({ queryKey: ['courses', cid, 'pending'] });
+      return result.invalid.length === 0;
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Bulk enroll failed.');
+      return false;
     }
   };
 
@@ -258,6 +259,8 @@ export function CoursePage() {
   }
 
   const { course, role, roster } = courseData;
+  const isStaff = role === 'ta' || role === 'instructor' || role === 'admin';
+  const isInstructor = role === 'instructor' || role === 'admin';
   const quizzes: QuizList[] = quizzesData.quizzes;
 
   const roleInfo = roleBadge(role);
@@ -269,10 +272,12 @@ export function CoursePage() {
           Question Banks
         </Link>
       </Button>
-      <Button variant="secondary" size="sm" onClick={() => setShowAccommodations(true)}>
-        <Clock className="size-4" aria-hidden="true" />
-        Accommodations
-      </Button>
+      {isInstructor && (
+        <Button variant="secondary" size="sm" onClick={() => setShowAccommodations(true)}>
+          <Clock className="size-4" aria-hidden="true" />
+          Accommodations
+        </Button>
+      )}
       <Button variant="default" size="sm" onClick={() => void handleCreateQuiz()}>
         <Plus className="size-4" aria-hidden="true" />
         New quiz
@@ -318,6 +323,7 @@ export function CoursePage() {
                 quiz={q}
                 role={role}
                 isStaff={isStaff}
+                isInstructor={isInstructor}
                 onRelease={handleRelease}
                 onCopy={handleCopyQuiz}
                 onDelete={handleDeleteQuiz}
@@ -334,10 +340,14 @@ export function CoursePage() {
           <h2 className="font-display text-lg font-semibold tracking-tight text-foreground mb-3">Roster</h2>
           <RosterTable
             roster={roster ?? []}
-            onRemove={(m) => setRemoveTarget(m)}
+            onRemove={isInstructor ? (m) => setRemoveTarget(m) : undefined}
           />
-          <AddMemberForm courseId={cid} onSubmit={handleAddMember} />
-          <BulkEnrollForm courseId={cid} onSubmit={handleBulkEnroll} />
+          {isInstructor && (
+            <>
+              <AddMemberForm courseId={cid} onSubmit={handleAddMember} />
+              <BulkEnrollForm courseId={cid} onSubmit={handleBulkEnroll} />
+            </>
+          )}
           <PendingList courseId={cid} />
         </section>
       )}
@@ -386,6 +396,7 @@ function QuizCard({
   quiz,
   role,
   isStaff,
+  isInstructor,
   onRelease,
   onCopy,
   onDelete,
@@ -394,6 +405,7 @@ function QuizCard({
   quiz: QuizList;
   role: string;
   isStaff: boolean;
+  isInstructor: boolean;
   onRelease: (versionId: number) => void;
   onCopy: (quizId: number) => void;
   onDelete: (quizId: number) => void;
@@ -527,17 +539,19 @@ function QuizCard({
                   Analytics
                 </Link>
               </Button>
-              <ConfirmAction
-                title={`Release results for “${title}”?`}
-                description="Every student who has finished sees their score and per-question marks right away. This cannot be taken back."
-                confirmLabel="Release results"
-                onConfirm={() => void onRelease(pub.id)}
-              >
-                <Button variant="secondary" size="sm">
-                  <RefreshCw className="size-3" aria-hidden="true" />
-                  Release results
-                </Button>
-              </ConfirmAction>
+              {isInstructor && (
+                <ConfirmAction
+                  title={`Release results for “${title}”?`}
+                  description="Every student who has finished sees their score and per-question marks right away. This cannot be taken back."
+                  confirmLabel="Release results"
+                  onConfirm={() => void onRelease(pub.id)}
+                >
+                  <Button variant="secondary" size="sm">
+                    <RefreshCw className="size-3" aria-hidden="true" />
+                    Release results
+                  </Button>
+                </ConfirmAction>
+              )}
               <Button asChild variant="secondary" size="sm">
                 <Link to={`/quizzes/${quiz.quiz_id}`}>
                   <Eye className="size-3" aria-hidden="true" />
@@ -556,10 +570,12 @@ function QuizCard({
                 <Copy className="size-3" aria-hidden="true" />
                 Copy
               </Button>
-              <Button variant="secondary" size="sm" onClick={() => setDeleteTarget(quiz.quiz_id)}>
-                <Trash2 className="size-3" aria-hidden="true" />
-                Delete
-              </Button>
+              {isInstructor && (
+                <Button variant="secondary" size="sm" onClick={() => setDeleteTarget(quiz.quiz_id)}>
+                  <Trash2 className="size-3" aria-hidden="true" />
+                  Delete
+                </Button>
+              )}
             </>
           )}
         </div>
@@ -639,7 +655,7 @@ function RosterTable({
   onRemove,
 }: {
   roster: RosterMember[];
-  onRemove: (member: RosterMember) => void;
+  onRemove?: (member: RosterMember) => void;
 }) {
   const columns = useMemo<ColumnDef<RosterMember>[]>(
     () => [
@@ -674,7 +690,7 @@ function RosterTable({
           );
         },
       },
-      {
+      ...(onRemove ? [{
         id: 'actions',
         header: () => <span className="sr-only">Actions</span>,
         cell: ({ row }) => (
@@ -688,7 +704,7 @@ function RosterTable({
             <span className="sr-only">Remove {row.original.name}</span>
           </Button>
         ),
-      },
+      } satisfies ColumnDef<RosterMember>] : []),
     ],
     [onRemove],
   );
@@ -758,7 +774,7 @@ function AddMemberForm({
   onSubmit,
 }: {
   courseId: number;
-  onSubmit: (data: AddMemberForm) => Promise<void>;
+  onSubmit: (data: AddMemberForm) => Promise<boolean>;
 }) {
   const {
     register,
@@ -771,8 +787,7 @@ function AddMemberForm({
   });
 
   const handleValid = async (data: AddMemberForm) => {
-    await onSubmit(data);
-    reset({ email: '', memberRole: 'student' });
+    if (await onSubmit(data)) reset({ email: '', memberRole: 'student' });
   };
 
   return (
@@ -840,7 +855,7 @@ function BulkEnrollForm({
   onSubmit,
 }: {
   courseId: number;
-  onSubmit: (data: BulkEnrollForm) => Promise<void>;
+  onSubmit: (data: BulkEnrollForm) => Promise<boolean>;
 }) {
   const {
     register,
@@ -853,8 +868,7 @@ function BulkEnrollForm({
   });
 
   const handleValid = async (data: BulkEnrollForm) => {
-    await onSubmit(data);
-    reset({ emails: '', memberRole: 'student' });
+    if (await onSubmit(data)) reset({ emails: '', memberRole: 'student' });
   };
 
   return (

@@ -5,22 +5,27 @@ import type { Request, Response, NextFunction } from 'express';
 import { db } from './db.js';
 import type { CourseRole } from './types.js';
 
-const PASSWORD_SECRET =
-  process.env.INTERVAL_PASSWORD_PEPPER ?? 'interval-dev-pepper-change-me';
-const JWT_SECRET =
-  process.env.INTERVAL_JWT_SECRET ?? 'interval-dev-jwt-secret-change-me';
+const DEV_PASSWORD_SECRET = 'interval-dev-pepper-change-me';
+const DEV_JWT_SECRET = 'interval-dev-jwt-secret-change-me';
+const PASSWORD_SECRET = process.env.INTERVAL_PASSWORD_PEPPER ?? DEV_PASSWORD_SECRET;
+const JWT_SECRET = process.env.INTERVAL_JWT_SECRET ?? DEV_JWT_SECRET;
 
 /**
- * Refuse to boot in production with the built-in dev secrets. Call once at startup.
+ * Refuse to boot in production with missing, built-in or undersized secrets.
  */
 export function assertSecretsConfigured(): void {
   if (process.env.NODE_ENV !== 'production') return;
-  const missing: string[] = [];
-  if (!process.env.INTERVAL_JWT_SECRET) missing.push('INTERVAL_JWT_SECRET');
-  if (!process.env.INTERVAL_PASSWORD_PEPPER) missing.push('INTERVAL_PASSWORD_PEPPER');
-  if (missing.length) {
+  const insecure: string[] = [];
+  for (const [key, fallback] of [
+    ['INTERVAL_JWT_SECRET', DEV_JWT_SECRET],
+    ['INTERVAL_PASSWORD_PEPPER', DEV_PASSWORD_SECRET],
+  ] as const) {
+    const value = process.env[key]?.trim();
+    if (!value || value === fallback || value.length < 32) insecure.push(key);
+  }
+  if (insecure.length) {
     throw new Error(
-      `Refusing to boot: set ${missing.join(' and ')} in production (dev defaults are insecure).`,
+      `Refusing to boot: set ${insecure.join(' and ')} to independently generated random secrets of at least 32 characters in production (dev defaults are insecure).`,
     );
   }
 }

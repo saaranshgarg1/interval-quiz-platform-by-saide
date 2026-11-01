@@ -1106,6 +1106,7 @@ export const resultRepo = {
          JOIN courses c ON c.id = qv.course_id
          JOIN attempts a ON a.id = r.attempt_id
          WHERE r.user_id = ? AND r.released = 1 AND r.pending_manual = 0
+           AND qv.show_scores IN ('release', 'immediate')
          ORDER BY r.released_at DESC`,
       )
       .all(userId) as (Result & Record<string, unknown>)[];

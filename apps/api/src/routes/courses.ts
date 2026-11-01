@@ -15,11 +15,11 @@ coursesRouter.use(requireAuth);
 function withCourseRole(req: AuthedRequest, courseId: number) {
   const course = courseRepo.get(courseId);
   if (!course) throw new AppError(404, 'Course not found.');
+  // Global admins retain staff access even when enrolled as students.
+  if (req.userRole === 'admin') return { course, role: 'admin' as const, isAdmin: true };
   const userId = req.userId as number;
   const role = courseRepo.courseRole(courseId, userId);
   if (!role) {
-    // Admins may inspect any course.
-    if (req.userRole === 'admin') return { course, role: 'admin' as const, isAdmin: true };
     throw new AppError(403, 'You are not enrolled in this course.');
   }
   return { course, role, isAdmin: false };
@@ -69,6 +69,10 @@ coursesRouter.put('/:courseId/members', (req: AuthedRequest, res) => {
   const user = email ? userRepo.findByEmail(String(email)) : undefined;
   if (!user) throw new AppError(404, 'No account exists for that email.');
   if (user.id === req.userId) throw new AppError(400, 'You are already a member of this course.');
+  if (desiredRole !== 'instructor' && courseRepo.courseRole(course.id, user.id) === 'instructor') {
+    const instructorCount = courseRepo.roster(course.id).filter((r) => r.role === 'instructor').length;
+    if (instructorCount <= 1) throw new AppError(400, 'Cannot demote the last instructor.');
+  }
   courseRepo.addMember(course.id, user.id, desiredRole);
   writeAudit(req, { action: 'course.member.set', course_id: course.id, target: 'user:' + user.id, after: desiredRole });
   res.json({ ok: true, member: { ...pubUser(user), role: desiredRole } });

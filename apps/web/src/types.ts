@@ -165,6 +165,8 @@ export interface CourseQuizzesResponse {
 export interface QuizDetailResponse {
   quiz_id: number;
   course_id: number;
+  /** Effective course role; global administrators resolve to instructor. */
+  viewer_role: 'student' | 'ta' | 'instructor';
   paused_at?: string | null;
   closed_at?: string | null;
   versions: VersionDetail[];

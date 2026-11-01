@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "description": "Interval — quiz portal for the sAIDE website (IIT Ropar). From-scratch graded & practice assessments.",
+  "engines": {
+    "node": ">=24"
+  },
   "packageManager": "pnpm@12.3.4",
   "scripts": {
     "dev:api": "pnpm --filter @interval/api dev",

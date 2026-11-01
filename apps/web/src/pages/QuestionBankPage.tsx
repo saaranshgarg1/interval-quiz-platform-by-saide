@@ -14,7 +14,7 @@ import {
   ListPlus,
 } from 'lucide-react';
 import { api } from '@/api';
-import { qk, useBanks, useBank } from '@/lib/queries';
+import { qk, useBanks, useBank, useCourse } from '@/lib/queries';
 import type { QuestionBank, BankQuestion, QuestionType, Difficulty } from '@/types';
 import { toast } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
@@ -64,12 +64,26 @@ const questionBase = {
 export const DIFFICULTY_LABEL: Record<Difficulty, string> = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
 const difficultyVariant = (d: Difficulty) => (d === 'hard' ? 'destructive' : d === 'easy' ? 'success' : 'warning');
 
-const singleMultipleSchema = z.object({
+const choiceSchema = {
   ...questionBase,
-  qtype: z.enum(['single', 'multiple']),
-  options: z.array(z.string().min(1, 'Option cannot be empty')).min(2, 'At least 2 options required'),
-  answer: z.any(),
+  options: z.array(z.string().trim().min(1, 'Option cannot be empty')).min(2, 'At least 2 options required').max(26),
   tolerance: z.any().optional(),
+};
+
+const singleSchema = z.object({
+  ...choiceSchema,
+  qtype: z.literal('single'),
+  answer: z.number().int().min(0, 'Select a correct option'),
+}).refine((data) => data.answer < data.options.length, {
+  path: ['answer'], message: 'Select a correct option',
+});
+
+const multipleSchema = z.object({
+  ...choiceSchema,
+  qtype: z.literal('multiple'),
+  answer: z.array(z.number().int().min(0)).min(1, 'Select at least one correct option'),
+}).refine((data) => data.answer.every((index) => index < data.options.length), {
+  path: ['answer'], message: 'Select valid correct options',
 });
 
 const shortSchema = z.object({
@@ -83,7 +97,8 @@ const shortSchema = z.object({
 const numericSchema = z.object({
   ...questionBase,
   qtype: z.enum(['numeric']),
-  answer: z.coerce.number({ error: 'Must be a number' }),
+  answer: z.union([z.number(), z.string().trim().min(1, 'Answer is required')])
+    .pipe(z.coerce.number({ error: 'Must be a number' })),
   tolerance: z.coerce.number().min(0).optional(),
   options: z.any().optional(),
 });
@@ -98,7 +113,8 @@ const descriptiveSchema = z.object({
 });
 
 const questionSchema = z.discriminatedUnion('qtype', [
-  singleMultipleSchema,
+  singleSchema,
+  multipleSchema,
   shortSchema,
   numericSchema,
   descriptiveSchema,
@@ -186,9 +202,11 @@ function NewBankForm({
   const {
     register,
     handleSubmit,
+    reset,
     formState: { errors, isSubmitting },
   } = useForm<NewBankForm>({
     resolver: zodResolver(newBankSchema),
+    defaultValues: { name: '', description: '' },
   });
 
   const onSubmit = async (data: NewBankForm) => {
@@ -199,6 +217,7 @@ function NewBankForm({
       });
       await queryClient.invalidateQueries({ queryKey: qk.banks(courseId) });
       toast.success('Question bank created', { description: res.bank.name });
+      reset();
       onOpenChange(false);
     } catch (err: any) {
       toast.error('Failed to create bank', { description: err.message });
@@ -259,10 +278,12 @@ function NewQuestionForm({
   open,
   onOpenChange,
   bankId,
+  courseId,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   bankId: number;
+  courseId: number;
 }) {
   const queryClient = useQueryClient();
   const [qtype, setQtype] = useState<QuestionType>('single');
@@ -273,6 +294,8 @@ function NewQuestionForm({
     formState: { errors, isSubmitting },
     watch,
     setValue,
+    reset,
+    clearErrors,
   } = useForm<z.input<typeof questionSchema>, unknown, QuestionForm>({
     resolver: zodResolver(questionSchema),
     defaultValues: {
@@ -314,12 +337,7 @@ function NewQuestionForm({
 
   const onSubmit = async (data: QuestionForm) => {
     try {
-      let finalAnswer: unknown = data.answer;
-      if (qtype === 'single') finalAnswer = Number(data.answer);
-      if (qtype === 'numeric') finalAnswer = Number(data.answer);
-      if (qtype === 'multiple') {
-        finalAnswer = Array.isArray(data.answer) ? data.answer : [Number(data.answer)];
-      }
+      const finalAnswer = data.answer;
 
       await api.post(`/banks/${bankId}/questions`, {
         qtype: data.qtype,
@@ -338,8 +356,13 @@ function NewQuestionForm({
           : [],
       });
 
-      await queryClient.invalidateQueries({ queryKey: qk.bank(bankId) });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: qk.bank(bankId) }),
+        queryClient.invalidateQueries({ queryKey: qk.banks(courseId) }),
+      ]);
       toast.success('Question added', { description: data.text.slice(0, 60) + '…' });
+      reset();
+      setQtype('single');
       onOpenChange(false);
     } catch (err: any) {
       toast.error('Failed to add question', { description: err.message });
@@ -367,6 +390,8 @@ function NewQuestionForm({
                   const val = e.target.value as QuestionType;
                   setQtype(val);
                   setValue('qtype', val);
+                  setValue('answer', val === 'multiple' ? [] : val === 'single' ? 0 : '');
+                  clearErrors(['answer', 'options', 'tolerance']);
                 }}
                 className="mt-1 block w-full rounded-[var(--radius-md)] border border-[var(--line-strong)] bg-card px-3 py-2 text-sm focus:outline-none focus:ring-[3px] focus:ring-ring/40"
               >
@@ -428,6 +453,7 @@ function NewQuestionForm({
                         name="answer"
                         checked={Number(watchedAnswer) === idx}
                         onChange={() => toggleOptionAnswer(idx)}
+                        aria-label={`Correct option ${String.fromCharCode(65 + idx)}`}
                         className="accent-[var(--primary)]"
                       />
                     ) : (
@@ -435,6 +461,7 @@ function NewQuestionForm({
                         type="checkbox"
                         checked={Array.isArray(watchedAnswer) && watchedAnswer.includes(idx)}
                         onChange={() => toggleOptionAnswer(idx)}
+                        aria-label={`Correct option ${String.fromCharCode(65 + idx)}`}
                         className="accent-[var(--primary)]"
                       />
                     )}
@@ -442,6 +469,7 @@ function NewQuestionForm({
                 ))}
               </div>
               {errors.options && <p className="text-sm text-destructive mt-1">{String(errors.options.message ?? '')}</p>}
+              {errors.answer && <p role="alert" className="text-sm text-destructive mt-1">{String(errors.answer.message ?? '')}</p>}
             </div>
           )}
 
@@ -543,7 +571,7 @@ function BankList({
   banks: QuestionBank[];
   selectedId: number | null;
   onSelect: (bank: QuestionBank) => void;
-  onDelete: (bank: QuestionBank) => void;
+  onDelete?: (bank: QuestionBank) => void;
   onCreate: () => void;
 }) {
   if (banks.length === 0) {
@@ -573,10 +601,15 @@ function BankList({
                 ? 'border-primary bg-accent/50'
                 : 'border-transparent hover:border-muted',
             )}
-            onClick={() => onSelect(b)}
           >
             <CardContent className="flex items-center justify-between p-4">
-              <div className="flex-1 min-w-0">
+              <button
+                type="button"
+                aria-label={`Select bank ${b.name}`}
+                aria-pressed={isSelected}
+                onClick={() => onSelect(b)}
+                className="flex-1 min-w-0 text-left rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
                 <div className="flex items-center gap-2">
                   <span className="font-semibold">{b.name}</span>
                   <Badge variant="secondary">{b.question_count ?? 0} Qs</Badge>
@@ -584,18 +617,17 @@ function BankList({
                 {b.description && (
                   <p className="text-sm text-muted-foreground truncate">{b.description}</p>
                 )}
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDelete(b);
-                }}
-                aria-label={`Delete bank ${b.name}`}
-              >
-                <Trash2 className="size-4" />
-              </Button>
+              </button>
+              {onDelete && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onDelete(b)}
+                  aria-label={`Delete bank ${b.name}`}
+                >
+                  <Trash2 className="size-4" />
+                </Button>
+              )}
             </CardContent>
           </Card>
         );
@@ -659,12 +691,11 @@ function QuestionsTable({ questions, onDelete }: QuestionsTableProps) {
       },
     ],
     onColumnFiltersChange: setColumnFilters,
-    onGlobalFilterChange: setGlobalFilter,
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getSortedRowModel: getSortedRowModel(),
-    state: { columnFilters, globalFilter, sorting },
+    state: { columnFilters, sorting },
     initialState: { columnFilters: [] },
     meta: { onDelete },
   });
@@ -765,6 +796,8 @@ function QuestionsTable({ questions, onDelete }: QuestionsTableProps) {
 export function QuestionBankPage() {
   const { courseId } = useParams<{ courseId: string }>();
   const cId = Number(courseId);
+  const { data: courseData } = useCourse(cId);
+  const isInstructor = courseData?.role === 'instructor' || courseData?.role === 'admin';
 
   const { data: banksData, isLoading: banksLoading, isError: banksError, error: banksErr } = useBanks(cId);
   const [selectedBank, setSelectedBank] = useState<QuestionBank | null>(null);
@@ -807,7 +840,10 @@ export function QuestionBankPage() {
     if (!confirm('Delete this question?')) return;
     try {
       await api.del(`/banks/${selectedBank.id}/questions/${q.id}`);
-      await queryClient.invalidateQueries({ queryKey: qk.bank(selectedBank.id) });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: qk.bank(selectedBank.id) }),
+        queryClient.invalidateQueries({ queryKey: qk.banks(cId) }),
+      ]);
       toast.success('Question deleted');
     } catch (err: any) {
       toast.error('Failed to delete question', { description: err.message });
@@ -854,7 +890,7 @@ export function QuestionBankPage() {
                 banks={banksData?.banks ?? []}
                 selectedId={selectedBank?.id ?? null}
                 onSelect={handleSelectBank}
-                onDelete={handleDeleteBank}
+                onDelete={isInstructor ? handleDeleteBank : undefined}
                 onCreate={() => setShowNewBank(true)}
               />
             )}
@@ -879,13 +915,15 @@ export function QuestionBankPage() {
                     >
                       <ListPlus className="size-4" /> Add Question
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => handleDeleteBank(selectedBank)}
-                    >
-                      <Trash2 className="size-4" /> Delete Bank
-                    </Button>
+                    {isInstructor && (
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => handleDeleteBank(selectedBank)}
+                      >
+                        <Trash2 className="size-4" /> Delete Bank
+                      </Button>
+                    )}
                   </div>
                 </div>
 
@@ -921,9 +959,11 @@ export function QuestionBankPage() {
 
       {selectedBank && (
         <NewQuestionForm
+          key={selectedBank.id}
           open={showNewQuestion}
           onOpenChange={setShowNewQuestion}
           bankId={selectedBank.id}
+          courseId={cId}
         />
       )}
     </div>

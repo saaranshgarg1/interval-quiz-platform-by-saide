@@ -235,12 +235,13 @@ quizzesRouter.get('/:quizId', (req: AuthedRequest, res) => {
     res.json({
       quiz_id: quiz.id,
       course_id: quiz.course_id,
+      viewer_role: role,
       versions: [versionDetail(published.id, req.userId as number, role)],
     });
     return;
   }
   const versions = quizVersionRepo.listForQuiz(quiz.id).map((v) => versionDetail(v.id, req.userId as number, role));
-  res.json({ quiz_id: quiz.id, course_id: quiz.course_id, paused_at: quiz.paused_at, closed_at: quiz.closed_at, versions });
+  res.json({ quiz_id: quiz.id, course_id: quiz.course_id, viewer_role: role, paused_at: quiz.paused_at, closed_at: quiz.closed_at, versions });
 });
 
 // ------------------------------------------------------------------- update meta
@@ -453,7 +454,7 @@ quizzesRouter.post('/:quizId/questions', (req: AuthedRequest, res) => {
     options: v.options,
     answer: v.answer,
     tolerance: v.tolerance,
-    points: Number(req.body.points) || 1,
+    points: v.points ?? 1,
     time_limit_seconds: parseTimeLimit(req.body.time_limit_seconds) ?? null,
     allow_assumptions: Boolean(req.body.allow_assumptions),
   });
@@ -483,7 +484,7 @@ quizzesRouter.put('/questions/:questionId', (req: AuthedRequest, res) => {
     options: v.options,
     answer: v.answer,
     tolerance: v.tolerance as number | null,
-    points: Number(next.points) || 1,
+    points: v.points ?? question.points,
     time_limit_seconds: parseTimeLimit(body.time_limit_seconds),
     allow_assumptions: body.allow_assumptions === undefined ? undefined : Boolean(body.allow_assumptions),
   });
@@ -541,7 +542,7 @@ quizzesRouter.post('/:quizId/questions/reorder', (req: AuthedRequest, res) => {
   const ids: number[] = Array.isArray(req.body?.question_ids) ? (req.body.question_ids as unknown[]).map(Number) : [];
   if (ids.length === 0) throw new AppError(400, 'question_ids is required.');
   const existing = questionRepo.listAuthored(draft.id).map((q) => q.id);
-  if (ids.length !== existing.length || ids.some((id) => !existing.includes(id))) {
+  if (ids.length !== existing.length || new Set(ids).size !== ids.length || ids.some((id) => !existing.includes(id))) {
     throw new AppError(400, 'question_ids must contain every question exactly once.');
   }
   questionRepo.reorder(draft.id, ids);

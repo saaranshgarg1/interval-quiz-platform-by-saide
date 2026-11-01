@@ -102,6 +102,7 @@ resultsRouter.post('/quiz/:quizVersionId/release', (req: AuthedRequest, res) => 
   const version = quizVersionRepo.get(Number(req.params.quizVersionId));
   if (!version) throw new AppError(404, 'Quiz version not found.');
   assertInstructor(req, version.course_id);
+  if (version.show_scores === 'never') throw new AppError(400, 'This quiz never shows scores.');
   const answerKey = Boolean((req.body ?? {}).answer_key ?? false);
   const n = resultRepo.releaseAllForVersion(version.id, answerKey);
   writeAudit(req, {
@@ -149,6 +150,9 @@ resultsRouter.get('/attempt/:attemptId', (req: AuthedRequest, res) => {
   if (!isOwner) {
     if (!version) throw new AppError(403, 'Not your attempt.');
     assertStaff(req, version.course_id);
+  }
+  if (isOwner && (!version || version.show_scores === 'never')) {
+    throw new AppError(404, 'Result has not been released yet.');
   }
   const result = resultRepo.getByAttempt(attempt.id);
   if (!result || !result.released) {

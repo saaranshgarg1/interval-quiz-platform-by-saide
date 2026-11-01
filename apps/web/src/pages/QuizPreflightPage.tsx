@@ -17,7 +17,6 @@ import {
 } from 'lucide-react';
 import { useQuiz } from '../lib/queries';
 import { api, ApiError, withNetworkRetry } from '../api';
-import { useAuth } from '../auth';
 import type { AttemptSessionResponse, PublicExamSettings, VersionDetail } from '../types';
 import { Page, EmptyState, ErrorState, LoadingSkeleton } from '../components/primitives';
 import { Badge } from '@/components/ui/badge';
@@ -112,7 +111,6 @@ function useSystemCheck(settings: PublicExamSettings | null, enabled: boolean): 
 export function QuizPreflightPage() {
   const { quizId } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
   const quizNumericId = Number(quizId);
   const reduceMotion = useReducedMotion();
 
@@ -125,7 +123,7 @@ export function QuizPreflightPage() {
   const version: VersionDetail | undefined =
     quizResponse?.versions.find((v) => v.status === 'published') ?? quizResponse?.versions[0];
   const settings = (version?.exam_settings ?? null) as PublicExamSettings | null;
-  const isStudent = user?.role === 'student';
+  const isStudent = quizResponse?.viewer_role === 'student';
   const checks = useSystemCheck(settings, Boolean(version) && isStudent);
 
   if (isLoading) {
@@ -150,7 +148,7 @@ export function QuizPreflightPage() {
     );
   }
 
-  const isStaff = !isStudent;
+  const isStaff = quizResponse.viewer_role === 'ta' || quizResponse.viewer_role === 'instructor';
   const my = version.my_attempts;
   const attemptsUsed = my?.count ?? 0;
   const attemptsRemaining = version.attempts_allowed - attemptsUsed;

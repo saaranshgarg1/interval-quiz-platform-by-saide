@@ -14,12 +14,18 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:4000',
+        target: process.env.VITE_API_URL || 'http://localhost:4000',
         changeOrigin: true,
       },
     },
   },
   preview: {
     port: 5174,
+    proxy: {
+      '/api': {
+        target: process.env.VITE_API_URL || 'http://localhost:4000',
+        changeOrigin: true,
+      },
+    },
   },
 });

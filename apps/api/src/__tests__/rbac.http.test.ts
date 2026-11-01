@@ -150,6 +150,31 @@ test('last instructor cannot be removed, even by admin', async () => {
   assert.match(r.body.error, /last instructor/i);
 });
 
+test('last instructor cannot be demoted through member updates', async () => {
+  const s = seedCourse();
+  for (const memberRole of ['student', 'ta']) {
+    const denied = await api(`/api/courses/${s.courseId}/members`, {
+      method: 'PUT',
+      token: mint(s.admin),
+      body: { email: s.instructor.email, memberRole },
+    });
+    assert.equal(denied.status, 400);
+    assert.match(denied.body.error, /last instructor/i);
+    assert.equal(courseRepo.courseRole(s.courseId, s.instructor.id), 'instructor');
+  }
+
+  // A second instructor makes a deliberate demotion safe.
+  courseRepo.addMember(s.courseId, s.outsider.id, 'instructor');
+  const allowed = await api(`/api/courses/${s.courseId}/members`, {
+    method: 'PUT',
+    token: mint(s.admin),
+    body: { email: s.instructor.email, memberRole: 'ta' },
+  });
+  assert.equal(allowed.status, 200);
+  assert.equal(courseRepo.courseRole(s.courseId, s.instructor.id), 'ta');
+  assert.equal(courseRepo.courseRole(s.courseId, s.outsider.id), 'instructor');
+});
+
 test('bank delete is instructor-only; create is staff', async () => {
   const s = seedCourse();
   const created = await api(`/api/banks/course/${s.courseId}`, {
@@ -310,6 +335,7 @@ test('scheduled quiz rejects attempts outside its window (item 8)', async () => 
     token: mint(s.student),
   });
   assert.equal(start.status, 403);
+  assert.equal(start.body.code, 'not_open');
   assert.match(start.body.error, /opens at/i);
 });
 
@@ -343,4 +369,13 @@ test('bulk enroll adds known emails and reports unknown ones (item 12)', async (
   assert.equal(ok.status, 200);
   assert.equal(ok.body.enrolled.length, 1);
   assert.deepEqual(ok.body.not_found, ['ghost-nobody@example.com']);
+});
+
+test('global admins retain course staff access without enrollment', async () => {
+  const s = seedCourse();
+  const denied = await api(`/api/courses/${s.courseId}/roster`, { token: mint(s.student) });
+  assert.equal(denied.status, 403, 'Students cannot access the course roster');
+
+  const adminRes = await api(`/api/courses/${s.courseId}/roster`, { token: mint(s.admin) });
+  assert.equal(adminRes.status, 200, 'Global admins may inspect any course');
 });

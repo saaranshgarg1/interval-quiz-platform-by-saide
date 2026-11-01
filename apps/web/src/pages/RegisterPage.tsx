@@ -14,13 +14,18 @@ import { Button } from '../components/ui/button';
 
 const schema = z
   .object({
-    name: z.string().min(2, 'Enter your full name.'),
-    email: z.string().email('Enter a valid email address.'),
+    name: z.string().trim().min(2, 'Name must be 2–100 characters.').max(100, 'Name must be 2–100 characters.'),
+    email: z
+      .string()
+      .trim()
+      .max(254, 'Enter a valid email address.')
+      .email('Enter a valid email address.'),
     entry: z
       .string()
       .trim()
+      .toUpperCase()
       .regex(/^([A-Za-z0-9._/-]{2,32})?$/, 'Use letters and digits only, e.g. 2022CSB1234.'),
-    password: z.string().min(8, 'Password must be at least 8 characters.'),
+    password: z.string().min(8, 'Password must be 8–200 characters.').max(200, 'Password must be 8–200 characters.'),
     confirm: z.string().min(8, 'Enter the password again.'),
   })
   .refine((d) => d.password === d.confirm, {
@@ -59,11 +64,14 @@ export function RegisterPage() {
     } catch (err) {
       if (err instanceof ApiError) {
         setFormError(err.message);
-        // Surface server-side email conflict on the email field for focus.
         if (err.status === 409) {
-          setError('email', {
-            message: 'An account with this email already exists.',
-          });
+          // If the entry number is already registered, focus on the entry field;
+          // otherwise, assume an email conflict.
+          if (err.message.includes('entry number')) {
+            setError('entry', { message: err.message }, { shouldFocus: true });
+          } else {
+            setError('email', { message: 'An account with this email already exists.' }, { shouldFocus: true });
+          }
         }
       } else {
         setFormError('Registration failed.');
