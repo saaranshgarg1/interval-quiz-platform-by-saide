@@ -5,7 +5,7 @@ import { validateQuestionData } from '../services/question-validation.js';
 import { TestHarness } from './harness.js';
 import { courseRepo } from '../repo.js';
 
-const POINTS_ERROR = 'Points must be between 0 and 1000.';
+const POINTS_ERROR = 'Points must be greater than 0 and at most 1000.';
 const base = { qtype: 'short', text: 'Points validation', answer: 'expected' };
 
 test('points accept positive finite numbers, numeric strings and fractions', () => {

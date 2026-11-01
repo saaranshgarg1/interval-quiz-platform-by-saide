@@ -42,8 +42,9 @@ COPY --from=builder /app/apps/web/dist ./apps/web/dist
 # Expose API and frontend ports
 EXPOSE 4000
 
-# Create persistent data directory
-RUN mkdir -p /app/data
+# Create persistent data directory owned by the unprivileged runtime user
+RUN mkdir -p /app/data && chown -R node:node /app/data
+USER node
 
 HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 

@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { defineConfig, devices } from '@playwright/test';
 
 /**
@@ -11,6 +12,8 @@ import { defineConfig, devices } from '@playwright/test';
  * suite runs offline. Point PW_WEB / PW_API at the dev servers before running.
  */
 const WEB = process.env.PW_WEB ?? 'http://localhost:5173';
+// System Chromium on Linux; elsewhere (Windows/macOS) use Playwright's bundled browser.
+const CHROMIUM = process.env.CHROMIUM_PATH ?? (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
 
 export default defineConfig({
   testDir: './e2e',
@@ -28,7 +31,7 @@ export default defineConfig({
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
-        launchOptions: { executablePath: process.env.CHROMIUM_PATH ?? '/usr/bin/chromium' },
+        launchOptions: CHROMIUM ? { executablePath: CHROMIUM } : {},
       },
     },
   ],

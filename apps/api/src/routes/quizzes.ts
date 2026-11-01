@@ -571,7 +571,7 @@ quizzesRouter.post('/:quizId/slots', (req: AuthedRequest, res) => {
   }
   const tag = typeof body.tag === 'string' && body.tag.trim() ? body.tag.trim().slice(0, 60) : null;
   const points = Number(body.points ?? 1);
-  if (!Number.isFinite(points) || points <= 0 || points > 1000) throw new AppError(400, 'Marks must be between 0 and 1000.');
+  if (!Number.isFinite(points) || points <= 0 || points > 1000) throw new AppError(400, 'Marks must be greater than 0 and at most 1000.');
   const count = Number(body.count ?? 1);
   if (!Number.isInteger(count) || count < 1 || count > 100) throw new AppError(400, 'Add between 1 and 100 random questions at a time.');
   const timeLimit = parseTimeLimit(body.time_limit_seconds) ?? null;

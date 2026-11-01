@@ -16,7 +16,7 @@ export interface Validated {
 const MAX_QUESTION_TEXT = 20_000;
 const MAX_OPTIONS = 26;
 const MAX_OPTION_TEXT = 2_000;
-const POINTS_ERROR = 'Points must be between 0 and 1000.';
+const POINTS_ERROR = 'Points must be greater than 0 and at most 1000.';
 
 /**
  * Points are optional only when the key is omitted (callers default/create or
