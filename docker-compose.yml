@@ -3,6 +3,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Same value as INTERVAL_GOOGLE_CLIENT_ID; read from .env at build time.
+        - VITE_GOOGLE_CLIENT_ID=${INTERVAL_GOOGLE_CLIENT_ID:-}
     container_name: interval-portal
     restart: unless-stopped
     ports:
@@ -10,6 +13,7 @@ services:
     # Secrets live in .env next to this file (never committed):
     #   INTERVAL_JWT_SECRET=<long random string>
     #   INTERVAL_PASSWORD_PEPPER=<long random string>
+    #   INTERVAL_GOOGLE_CLIENT_ID=<OAuth web client ID>  (optional; enables Google sign-in)
     env_file:
       - .env
     environment:

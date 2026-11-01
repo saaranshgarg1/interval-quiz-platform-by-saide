@@ -6,11 +6,19 @@ const ALLOWED_DOMAIN = 'iitrpr.ac.in';
 export async function verifyGoogleIdToken(
   idToken: string,
 ): Promise<{ email: string; name: string | null }> {
-  const client = new OAuth2Client(process.env.INTERVAL_GOOGLE_CLIENT_ID);
-  const ticket = await client.verifyIdToken({
-    idToken,
-    audience: process.env.INTERVAL_GOOGLE_CLIENT_ID,
-  });
+  const clientId = process.env.INTERVAL_GOOGLE_CLIENT_ID;
+  if (!clientId) {
+    throw new AppError(503, 'Google sign-in is not configured.');
+  }
+  const client = new OAuth2Client(clientId);
+  // A malformed, expired or wrong-audience token makes the library throw;
+  // report that as a rejected sign-in, not a server error.
+  let ticket;
+  try {
+    ticket = await client.verifyIdToken({ idToken, audience: clientId });
+  } catch {
+    throw new AppError(401, 'Invalid Google ID token.');
+  }
   const payload = ticket.getPayload();
 
   if (!payload) {
