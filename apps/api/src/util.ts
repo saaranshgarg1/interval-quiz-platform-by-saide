@@ -37,6 +37,22 @@ export function fromMs(ms: number): string {
   return new Date(ms).toISOString().slice(0, 23).replace('T', ' ');
 }
 
+const IST_FORMAT = new Intl.DateTimeFormat('en-IN', {
+  timeZone: 'Asia/Kolkata',
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: true,
+});
+
+/** Human-readable IST time for messages shown to people, e.g. "4 Nov 2026, 10:00 am IST". */
+export function formatIst(timestampOrMs: string | number): string {
+  const ms = typeof timestampOrMs === 'number' ? timestampOrMs : toMs(timestampOrMs);
+  return Number.isNaN(ms) ? String(timestampOrMs) : `${IST_FORMAT.format(ms)} IST`;
+}
+
 export function dateToUtc(d: string): string {
   const dt = new Date(d);
   if (Number.isNaN(dt.getTime())) return d;

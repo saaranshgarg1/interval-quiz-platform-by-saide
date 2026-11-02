@@ -1,3 +1,4 @@
+import { formatIST } from '../../lib/time';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -85,7 +86,7 @@ function AppealCard({ a, onDone }: { a: AppealWithContext; onDone: () => void })
           <strong>{a.student_name}</strong>
           {a.student_entry && <span className="font-mono text-muted-foreground">{a.student_entry}</span>}
           {a.question && <span className="font-mono">{a.question.label}</span>}
-          <span className="ml-auto text-xs text-muted-foreground">{new Date(`${a.created_at.replace(' ', 'T')}Z`).toLocaleString()}</span>
+          <span className="ml-auto text-xs text-muted-foreground">{formatIST(a.created_at)}</span>
         </div>
         <p className="flex items-start gap-2 whitespace-pre-wrap text-sm">
           <MessageSquareWarning className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />

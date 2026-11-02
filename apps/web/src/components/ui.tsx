@@ -1,3 +1,4 @@
+import { formatIST } from '../lib/time';
 export const IconSave = ({ className }: { className?: string }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true" className={className}>
     <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
@@ -73,10 +74,7 @@ export function statusLabel(status: string): { label: string; symbol: string; to
 }
 
 export function formatDateTime(utc: string | null | undefined): string {
-  if (!utc) return '—';
-  const d = new Date(utc.includes('T') ? utc : utc.replace(' ', 'T') + 'Z');
-  if (Number.isNaN(d.getTime())) return utc;
-  return d.toLocaleString();
+  return formatIST(utc);
 }
 
 export function Button({

@@ -230,6 +230,10 @@ describe('regrading', () => {
     regradeQuestion(broken, { accept_also: [], mode: 'full_marks' });
     assert.equal(attemptRepo.get(b)?.score, 2);
     assert.equal(attemptRepo.get(a)?.score, 3);
+    // The Questions tab's "Avg. marks" follows the regrade; difficulty still uses the real answers.
+    const stat = questionReview(exam.versionId).questions.find((q) => q.question_id === broken)!;
+    assert.equal(stat.awarded_fraction, 1, 'full marks for all → 100% awarded');
+    assert.equal(stat.mean_fraction, 0.5, 'answers themselves: one of two right (key is C)');
 
     regradeQuestion(broken, { mode: 'dropped' });
     assert.equal(attemptRepo.get(a)?.max_score, 1);
@@ -388,7 +392,9 @@ describe('appeals', () => {
     resultRepo.releaseAllForVersion(exam.versionId);
     const appeal = createAppeal(student.id, attemptId, { kind: 'grading', question_id: q1, message: 'Option B is also right.' });
     assert.throws(() => createAppeal(student.id, attemptId, { kind: 'grading', question_id: q1, message: 'Again, please look.' }), /already/);
-    assert.throws(() => createAppeal(student.id, attemptId, { kind: 'integrity', message: 'Nothing happened here.' }), /no integrity/);
+    // Only per-question mark appeals exist.
+    assert.throws(() => createAppeal(student.id, attemptId, { kind: 'integrity', message: 'Nothing happened here.' }), /only about a question/);
+    assert.throws(() => createAppeal(student.id, attemptId, { kind: 'grading', message: 'The whole paper was unfair.' }), /Choose the question/);
 
     assert.equal(appealsForVersion(exam.versionId).open, 1);
     assert.throws(() => resolveAppeal(exam.instructor.id, appeal.id, { status: 'rejected' }), /why/);

@@ -9,7 +9,7 @@ import {
   asyncHandler,
 } from '../auth.js';
 import type { AuthedRequest } from '../auth.js';
-import { verifyGoogleIdToken } from '../services/google-sso.js';
+import { googleSignInConfig, verifyGoogleIdToken } from '../services/google-sso.js';
 import { profileFor, updateOwnPrefs } from '../services/accessibility.js';
 import { entryNumberFromEmail, normalizeEntryNumber } from '../util.js';
 import type { User } from '../types.js';
@@ -133,6 +133,15 @@ authRouter.put('/accessibility', requireAuth, (req: AuthedRequest, res) => {
 authRouter.post('/logout-all', requireAuth, (req: AuthedRequest, res) => {
   userRepo.bumpTokenVersion(req.userId as number);
   res.json({ ok: true });
+});
+
+/**
+ * Public: whether the login page should offer Google sign-in, for the origin
+ * the page is running on (?origin=…), and if not, why.
+ */
+authRouter.get('/config', (req, res) => {
+  const origin = typeof req.query.origin === 'string' ? req.query.origin.slice(0, 300) : undefined;
+  res.json({ google: googleSignInConfig(origin) });
 });
 
 // sAIDE SSO / CAS integration handler

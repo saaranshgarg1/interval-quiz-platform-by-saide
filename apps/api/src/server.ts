@@ -98,7 +98,14 @@ app.use('/api', (req, res, next) => {
   }
   next();
 });
-app.use('/api', cors({ origin: true, credentials: true }));
+app.use('/api', cors({ origin: true, credentials: true, exposedHeaders: ['X-Server-Time'] }));
+// Every API response carries the server clock (epoch ms) so the web app shows
+// and checks crucial times (window open/close, publish) against the server, not
+// against a student's possibly-wrong device clock.
+app.use('/api', (_req, res, next) => {
+  res.setHeader('X-Server-Time', String(Date.now()));
+  next();
+});
 
 app.use(express.json({ limit: '512kb' }));
 

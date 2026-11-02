@@ -1,4 +1,5 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { deviceToServerMs, formatIST, istInputToUtcIso, serverNow, utcToIstInput, windowStatus } from '../lib/time';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../api';
 import type {
@@ -11,6 +12,8 @@ import type {
   BankQuestion,
 } from '../types';
 import { RichText } from '../components/RichText';
+import { LatexPaste, RichPreview } from '../components/LatexPaste';
+import { marksLabel } from '../lib/marks';
 import { toast } from '@/components/ui/sonner';
 import { Page } from '@/components/primitives';
 import { Button } from '@/components/ui/button';
@@ -49,24 +52,12 @@ const EMPTY_QUESTION = () => ({
   answer: 0 as number | number[] | string,
   tolerance: '0.01',
   points: '1' as string,
+  /** Marks taken off for a wrong answer ('' or 0 = no negative marking). */
+  negative_points: '0' as string,
   time_limit_seconds: '' as string,
   allow_assumptions: false,
   id: null as number | null,
 });
-
-function convertToDatetimeLocal(dateString: string): string {
-  try {
-    const date = new Date(dateString);
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    return `${year}-${month}-${day}T${hours}:${minutes}`;
-  } catch {
-    return '';
-  }
-}
 
 export function QuizEditorPage() {
   const { quizId } = useParams();
@@ -74,6 +65,8 @@ export function QuizEditorPage() {
   const [detail, setDetail] = useState<QuizDetailResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [savingMeta, setSavingMeta] = useState(false);
+  /** Bumped each time load() refills the settings form from the server. */
+  const [loadGen, setLoadGen] = useState(0);
 
   // meta form
   const [title, setTitle] = useState('');
@@ -119,8 +112,9 @@ export function QuizEditorPage() {
         setExamSettings({ ...DEFAULT_EXAM_SETTINGS, ...(draft.exam_settings as ExamSettings) });
         setShowScores(draft.show_scores);
         setQuizType(draft.quiz_type || 'anytime');
-        setWindowOpensAt(draft.window_opens_at ? convertToDatetimeLocal(draft.window_opens_at) : '');
+        setWindowOpensAt(draft.window_opens_at ? utcToIstInput(draft.window_opens_at) : '');
         setWindowDuration(draft.window_duration_minutes ? String(draft.window_duration_minutes) : '');
+        setLoadGen((g) => g + 1);
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load quiz.');
@@ -131,40 +125,196 @@ export function QuizEditorPage() {
     void load();
   }, [load]);
 
+  /**
+   * Re-read only the server's publish verdict after a question is added or
+   * removed locally, without resetting the (possibly unsaved) settings form.
+   */
+  const refreshPublishStatus = useCallback(async () => {
+    try {
+      const res = await api.get<QuizDetailResponse>(`/quizzes/${quizId}`);
+      setDetail((prev) =>
+        prev
+          ? {
+              ...prev,
+              versions: prev.versions.map((v) => {
+                const fresh = res.versions.find((f) => f.id === v.id);
+                return fresh ? { ...v, publish_problems: fresh.publish_problems, question_count: fresh.question_count } : v;
+              }),
+            }
+          : prev,
+      );
+    } catch {
+      // Non-fatal: the publish route still re-checks everything.
+    }
+  }, [quizId]);
+
+  /**
+   * Auto-update every 10 s while the tab is visible: questions, random slots,
+   * publish status and versions come from the server (e.g. a co-instructor's
+   * edits). Typed-but-unsaved input lives in separate state and is never
+   * overwritten; only if the draft itself changed (published or replaced
+   * elsewhere) is the whole page reloaded.
+   */
+  const [lastSync, setLastSync] = useState<number | null>(null);
+  useEffect(() => {
+    let busy = false;
+    const tick = async () => {
+      if (busy || document.hidden) return;
+      busy = true;
+      try {
+        const res = await api.get<QuizDetailResponse>(`/quizzes/${quizId}`);
+        let draftChanged = false;
+        setDetail((prev) => {
+          const before = prev?.versions.find((v) => v.status === 'draft')?.id;
+          const after = res.versions.find((v) => v.status === 'draft')?.id;
+          draftChanged = Boolean(prev) && before !== after;
+          return res;
+        });
+        setLastSync(Date.now());
+        if (draftChanged) void load();
+      } catch {
+        // Offline for a moment: try again on the next tick.
+      } finally {
+        busy = false;
+      }
+    };
+    const timer = window.setInterval(() => void tick(), 10_000);
+    const onVisible = () => {
+      if (!document.hidden) void tick();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [quizId, load]);
+
   const draft = detail?.versions.find((v) => v.status === 'draft');
   const published = detail?.versions.find((v) => v.status === 'published');
   const editable = !!draft;
+  // The server's own publish checks; the empty-quiz rule is repeated so it reacts instantly.
+  const publishBlockers = draft
+    ? draft.questions.length + (draft.slots?.length ?? 0) === 0
+      ? ['Add at least one question before publishing.']
+      : (draft.publish_problems ?? []).filter((p) => !p.startsWith('Add at least one question'))
+    : [];
+
+  // ------------------------------------------------ settings auto-save
+  // Every settings field saves itself ~1.5 s after the last change, so nobody
+  // loses settings by forgetting a button. Saves run one at a time, in order.
+  const metaPayload = useMemo(
+    () => ({
+      title,
+      instructions,
+      duration_minutes: duration === '' ? null : Number(duration),
+      shuffle_questions: shuffleQ ? 1 : 0,
+      shuffle_options: shuffleO ? 1 : 0,
+      attempts_allowed: Number(attempts),
+      exam_settings: examSettings,
+      show_scores: showScores,
+      quiz_type: quizType,
+      window_opens_at: quizType === 'scheduled' ? (istInputToUtcIso(windowOpensAt) ?? '') : null,
+      window_duration_minutes: quizType === 'scheduled' ? Number(windowDuration) : null,
+    }),
+    [title, instructions, duration, shuffleQ, shuffleO, attempts, examSettings, showScores, quizType, windowOpensAt, windowDuration],
+  );
+  const metaKey = JSON.stringify(metaPayload);
+  /** A scheduled quiz can only be saved once its window has a start and a length. */
+  const metaIncomplete =
+    quizType === 'scheduled' && (!istInputToUtcIso(windowOpensAt) || !(Number(windowDuration) > 0));
+  const latestMeta = useRef({ key: metaKey, payload: metaPayload, incomplete: metaIncomplete });
+  latestMeta.current = { key: metaKey, payload: metaPayload, incomplete: metaIncomplete };
+  const savedMetaKey = useRef<string | null>(null);
+  const saveChain = useRef<Promise<boolean>>(Promise.resolve(true));
+  const [autoSave, setAutoSave] = useState<{
+    state: 'idle' | 'pending' | 'saving' | 'saved' | 'error' | 'incomplete';
+    at?: number;
+    message?: string;
+  }>({ state: 'idle' });
+
+  // After load() fills the form, the values on screen are what the server has.
+  useEffect(() => {
+    if (loadGen === 0) return;
+    savedMetaKey.current = latestMeta.current.key;
+    setAutoSave({ state: 'idle' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadGen]);
+
+  /** Save the current settings (queued behind any save already running). Resolves true when saved. */
+  const saveMetaNow = useCallback((): Promise<boolean> => {
+    saveChain.current = saveChain.current.then(async () => {
+      const { key, payload, incomplete } = latestMeta.current;
+      if (key === savedMetaKey.current) return true;
+      if (incomplete) {
+        setAutoSave({ state: 'incomplete' });
+        return false;
+      }
+      setSavingMeta(true);
+      setAutoSave({ state: 'saving' });
+      try {
+        await api.put(`/quizzes/${quizId}`, payload);
+        savedMetaKey.current = key;
+        setAutoSave({ state: latestMeta.current.key === key ? 'saved' : 'pending', at: Date.now() });
+        // Refresh rules/preview from the server without touching the form.
+        void api
+          .get<QuizDetailResponse>(`/quizzes/${quizId}`)
+          .then((res) => setDetail(res))
+          .catch(() => {});
+        return true;
+      } catch (err) {
+        setAutoSave({ state: 'error', message: err instanceof ApiError ? err.message : 'Could not reach the server.' });
+        return false;
+      } finally {
+        setSavingMeta(false);
+      }
+    });
+    return saveChain.current;
+  }, [quizId]);
+
+  // Debounced auto-save whenever a setting changes.
+  useEffect(() => {
+    if (!editable || savedMetaKey.current === null || metaKey === savedMetaKey.current) return;
+    if (metaIncomplete) {
+      setAutoSave({ state: 'incomplete' });
+      return;
+    }
+    setAutoSave((s) => (s.state === 'saving' ? s : { state: 'pending' }));
+    const t = window.setTimeout(() => void saveMetaNow(), 1500);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [metaKey, metaIncomplete]);
+
+  // Warn before leaving the page with settings that are not saved yet.
+  useEffect(() => {
+    const onLeave = (e: BeforeUnloadEvent) => {
+      if (savedMetaKey.current !== null && latestMeta.current.key !== savedMetaKey.current) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', onLeave);
+    return () => window.removeEventListener('beforeunload', onLeave);
+  }, []);
 
   if (!detail) return error ? <div className="banner error" role="alert">{error}</div> : <p className="muted">Loading quiz…</p>;
 
+
   const saveMeta = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    setSavingMeta(true);
-    setError(null);
-    try {
-      await api.put(`/quizzes/${quizId}`, {
-        title,
-        instructions,
-        duration_minutes: duration === '' ? null : Number(duration),
-        shuffle_questions: shuffleQ ? 1 : 0,
-        shuffle_options: shuffleO ? 1 : 0,
-        attempts_allowed: Number(attempts),
-        exam_settings: examSettings,
-        show_scores: showScores,
-        quiz_type: quizType,
-        window_opens_at: quizType === 'scheduled' ? new Date(windowOpensAt).toISOString() : null,
-        window_duration_minutes: quizType === 'scheduled' ? Number(windowDuration) : null,
-      });
-      toast.success('Quiz settings saved');
-      void load();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Save failed.');
-    } finally {
-      setSavingMeta(false);
-    }
+    const ok = await saveMetaNow();
+    if (ok) toast.success('Quiz settings saved');
   };
 
   const publish = async () => {
+    // Publish exactly what is on screen: finish any pending settings save first.
+    if (!(await saveMetaNow())) {
+      setError(
+        latestMeta.current.incomplete
+          ? 'Set the window opening time and duration before publishing.'
+          : 'Your latest settings could not be saved, so the quiz was not published. Fix the message under Settings and try again.',
+      );
+      return;
+    }
     try {
       await api.patch(`/quizzes/${quizId}/publish`, {});
       navigate(`/quizzes/${quizId}/preflight`);
@@ -220,6 +370,7 @@ export function QuizEditorPage() {
             }
           : prev,
       );
+      void refreshPublishStatus();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to add question.');
     }
@@ -268,6 +419,7 @@ export function QuizEditorPage() {
             }
           : prev,
       );
+      void refreshPublishStatus();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to delete question.');
     }
@@ -352,6 +504,7 @@ export function QuizEditorPage() {
         answer: bq.answer,
         tolerance: bq.tolerance,
         points: bq.points,
+        negative_points: bq.negative_points ?? 0,
         allow_assumptions: Boolean(bq.allow_assumptions),
       });
       toast.success(`Imported question into draft`);
@@ -365,6 +518,7 @@ export function QuizEditorPage() {
             }
           : prev,
       );
+      void refreshPublishStatus();
     } catch (err) {
       setError('Failed to import question from bank.');
     } finally {
@@ -375,7 +529,7 @@ export function QuizEditorPage() {
   return (
     <Page
       title={title || 'Untitled quiz'}
-      description={`Course ID #${detail.course_id} · ${draft ? `Editing draft v${draft.version}` : `Viewing published v${published?.version}`}${published && published.quiz_type === 'scheduled' && published.window_opens_at ? ` · Opens ${new Date(published.window_opens_at).toLocaleString()} for ${published.window_duration_minutes} min` : ''}`}
+      description={`Course ID #${detail.course_id} · ${draft ? `Editing draft v${draft.version}` : `Viewing published v${published?.version}`}${published && published.quiz_type === 'scheduled' && published.window_opens_at ? ` · Opens ${formatIST(published.window_opens_at)} for ${published.window_duration_minutes} min` : ''}`}
       actions={
         <div className="flex items-center gap-2 flex-wrap">
           <Button asChild variant="secondary" size="sm">
@@ -399,13 +553,31 @@ export function QuizEditorPage() {
                       Students can see it and start as soon as its rules allow. The questions and exam rules are then
                       frozen: later edits go into a new draft version, and students who already started stay on this one.
                     </p>
-                    <p className="mt-2">Unsaved changes in the settings form are not included — save them first.</p>
+                    <p className="mt-2">Your settings are saved automatically; any change still pending is saved before publishing.</p>
+                    {draft.quiz_type === 'scheduled' && draft.window_opens_at && (() => {
+                      const w = windowStatus(draft.window_opens_at, draft.window_duration_minutes);
+                      if (!w || w.state !== 'open') return null;
+                      const minsAgo = Math.round((serverNow() - w.opensMs) / 60_000);
+                      const minsLeft = Math.max(0, Math.round((w.closesMs - serverNow()) / 60_000));
+                      return (
+                        <p className="mt-2 rounded-[var(--radius-md)] border border-[var(--warning)]/50 bg-[var(--warning)]/10 p-2 text-foreground" role="alert">
+                          <strong>The window already opened</strong> at {formatIST(w.opensMs, 'timeShort')} ({minsAgo} min ago).
+                          Students will have only {minsLeft} min left before it closes at {formatIST(w.closesMs, 'timeShort')}.
+                          To give the full time, cancel and set a later opening time.
+                        </p>
+                      );
+                    })()}
                   </>
                 }
                 confirmLabel="Publish"
                 onConfirm={() => void publish()}
               >
-                <Button size="sm" disabled={draft.questions.length + (draft.slots?.length ?? 0) === 0}>
+                <Button
+                  size="sm"
+                  disabled={publishBlockers.length > 0}
+                  aria-describedby={publishBlockers.length > 0 ? 'publish-blockers' : undefined}
+                  title={publishBlockers.length > 0 ? `Can't publish yet: ${publishBlockers.join(' ')}` : undefined}
+                >
                   Publish live version
                 </Button>
               </ConfirmAction>
@@ -454,6 +626,26 @@ export function QuizEditorPage() {
     >
       {error && <div className="banner error" role="alert">{error}</div>}
 
+      <p className="mt-2 text-xs text-muted-foreground" aria-live="off">
+        Updates automatically every 10 seconds
+        {lastSync ? ` · last updated ${formatIST(deviceToServerMs(lastSync), 'time')}` : ''}. Unsaved typing is kept.
+      </p>
+
+      {editable && publishBlockers.length > 0 && (
+        <div
+          id="publish-blockers"
+          role="status"
+          className="mt-4 rounded-[var(--radius-md)] border border-[var(--warning)]/40 bg-[var(--warning)]/8 p-4 text-sm"
+        >
+          <p className="font-semibold">Publish is turned off until you fix {publishBlockers.length === 1 ? 'this' : 'these'}:</p>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
+            {publishBlockers.map((p) => (
+              <li key={p}>{p}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <Dialog open={showBankModal} onOpenChange={(open) => {
         setShowBankModal(open);
         if (!open) {
@@ -475,13 +667,39 @@ export function QuizEditorPage() {
                 className="mt-1 block w-full rounded-[var(--radius-md)] border border-[var(--line-strong)] bg-card px-3 py-2 text-sm focus:outline-none focus:ring-[3px] focus:ring-ring/40"
               >
                 <option value="">-- Choose a Question Bank --</option>
-                {banks.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name} ({b.question_count ?? 0} questions)
-                  </option>
-                ))}
+                {banks.map((b) => {
+                  const n = b.question_count ?? 0;
+                  return (
+                    <option key={b.id} value={b.id} disabled={n === 0}>
+                      {b.name} ({n === 0 ? 'empty — add questions first' : `${n} question${n === 1 ? '' : 's'}`})
+                    </option>
+                  );
+                })}
               </select>
             </div>
+
+            {!loadingBank && !bankError && selectedBankId === '' && banks.every((b) => (b.question_count ?? 0) === 0) && (
+              <div role="alert" className="rounded-[var(--radius-md)] border border-destructive/40 bg-destructive/5 p-3 text-sm">
+                <p className="font-medium text-destructive">
+                  {banks.length === 0 ? 'This course has no question banks yet.' : 'All question banks in this course are empty.'}
+                </p>
+                <p className="mt-1 text-muted-foreground">
+                  Add questions to a bank before using it in a quiz, or write questions directly in this quiz instead.
+                </p>
+                <a href={`/courses/${detail.course_id}/banks`} className="mt-2 inline-block font-medium text-primary underline underline-offset-2">
+                  Go to question banks
+                </a>
+              </div>
+            )}
+
+            {!loadingBank && !bankError && selectedBankId !== '' && bankQuestions.length === 0 && (
+              <div role="alert" className="rounded-[var(--radius-md)] border border-destructive/40 bg-destructive/5 p-3 text-sm">
+                <p className="font-medium text-destructive">This bank has no questions, so there is nothing to add.</p>
+                <a href={`/courses/${detail.course_id}/banks`} className="mt-2 inline-block font-medium text-primary underline underline-offset-2">
+                  Go to question banks
+                </a>
+              </div>
+            )}
 
             {loadingBank && <p role="status" className="text-sm text-muted-foreground">Loading question bank…</p>}
             {bankError && (
@@ -497,7 +715,10 @@ export function QuizEditorPage() {
               <RandomFromBank
                 quizId={Number(quizId)}
                 bankId={Number(selectedBankId)}
+                bankName={banks.find((b) => b.id === selectedBankId)?.name ?? 'this bank'}
                 questions={bankQuestions}
+                existingSlots={draft?.slots ?? []}
+                bankPageHref={`/courses/${detail.course_id}/banks`}
                 showTimeLimit={examSettings.question_timer === 'per_question'}
                 onAdded={(v) => {
                   replaceVersion(v);
@@ -514,7 +735,7 @@ export function QuizEditorPage() {
                     <CardContent className="p-3 flex justify-between items-center">
                       <div className="flex-1 mr-3">
                         <div className="text-xs text-muted-foreground mb-1">
-                          {bq.qtype.toUpperCase()} · {bq.points} pt · {bq.difficulty ?? 'medium'}
+                          {bq.qtype.toUpperCase()} · {marksLabel(bq.points, bq.negative_points)} · {bq.difficulty ?? 'medium'}
                           {bq.tags.length ? ` · ${bq.tags.join(', ')}` : ''}
                         </div>
                         <RichText content={bq.text} />
@@ -617,7 +838,7 @@ export function QuizEditorPage() {
               {quizType === 'scheduled' && (
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <Label htmlFor="window-opens">Window opens at</Label>
+                    <Label htmlFor="window-opens">Window opens at (IST)</Label>
                     <Input
                       id="window-opens"
                       type="datetime-local"
@@ -637,6 +858,19 @@ export function QuizEditorPage() {
                       disabled={!editable}
                     />
                   </div>
+                  {(() => {
+                    const opensIso = istInputToUtcIso(windowOpensAt);
+                    const mins = Number(windowDuration);
+                    if (!opensIso || !(mins > 0)) return null;
+                    const closesMs = new Date(opensIso).getTime() + mins * 60_000;
+                    const past = closesMs <= serverNow();
+                    return (
+                      <p className={`col-span-2 text-xs ${past ? 'text-destructive' : 'text-muted-foreground'}`} role={past ? 'alert' : undefined}>
+                        Opens {formatIST(opensIso)} · closes {formatIST(closesMs)}
+                        {past ? ' — this is already in the past (server time), so students could not take it.' : ''}
+                      </p>
+                    );
+                  })()}
                 </div>
               )}
               <div>
@@ -664,9 +898,12 @@ export function QuizEditorPage() {
                   </label>
                 </div>
               </div>
-              <Button type="submit" disabled={!editable || savingMeta} variant="secondary">
-                {savingMeta ? 'Saving…' : 'Save settings'}
-              </Button>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button type="submit" disabled={!editable || savingMeta} variant="secondary" size="sm">
+                  {savingMeta ? 'Saving…' : 'Save now'}
+                </Button>
+                {editable && <AutoSaveStatus status={autoSave} onRetry={() => void saveMetaNow()} />}
+              </div>
             </form>
           </CardContent>
         </Card>
@@ -709,9 +946,12 @@ export function QuizEditorPage() {
               </p>
             </div>
             {editable && (
-              <Button size="sm" disabled={savingMeta} onClick={() => void saveMeta()}>
-                {savingMeta ? 'Saving…' : 'Save exam rules'}
-              </Button>
+              <div className="flex flex-col items-end gap-1">
+                <Button size="sm" variant="secondary" disabled={savingMeta} onClick={() => void saveMeta()}>
+                  {savingMeta ? 'Saving…' : 'Save now'}
+                </Button>
+                <AutoSaveStatus status={autoSave} onRetry={() => void saveMetaNow()} />
+              </div>
             )}
           </div>
           <ExamSettingsPanel
@@ -755,7 +995,7 @@ export function QuizEditorPage() {
                       <div className="flex items-center gap-2">
                         <strong>Q{q.order_index + 1}</strong>
                         <Badge variant="secondary">{q.qtype}</Badge>
-                        <span className="text-sm text-muted-foreground">{q.points} pt</span>
+                        <span className="text-sm text-muted-foreground">{marksLabel(q.points, q.negative_points)}</span>
                         {examSettings.question_timer === 'per_question' && (
                           <Badge variant="outline">{q.time_limit_seconds ?? examSettings.question_time_seconds}s</Badge>
                         )}
@@ -828,7 +1068,7 @@ export function QuizEditorPage() {
                     <div className="flex items-center gap-2 mb-2">
                       <strong>Q{q.order_index + 1}</strong>
                       <Badge variant="secondary">{q.qtype}</Badge>
-                      <span className="text-sm text-muted-foreground">{q.points} pt</span>
+                      <span className="text-sm text-muted-foreground">{marksLabel(q.points, q.negative_points)}</span>
                       {q.allow_assumptions && <Badge variant="outline">assumptions allowed</Badge>}
                       {q.grading_mode && q.grading_mode !== 'normal' && (
                         <Badge variant="warning">{q.grading_mode === 'dropped' ? 'dropped' : 'full marks for all'}</Badge>
@@ -975,6 +1215,46 @@ export function QuizEditorPage() {
   );
 }
 
+/** Auto-save state for the settings form, e.g. "All changes saved · 10:02:31 am IST". */
+function AutoSaveStatus({
+  status,
+  onRetry,
+}: {
+  status: { state: 'idle' | 'pending' | 'saving' | 'saved' | 'error' | 'incomplete'; at?: number; message?: string };
+  onRetry: () => void;
+}) {
+  const base = 'text-xs';
+  switch (status.state) {
+    case 'saving':
+      return <span className={`${base} text-muted-foreground`} role="status">Saving…</span>;
+    case 'pending':
+      return <span className={`${base} text-muted-foreground`} role="status">Unsaved changes — saving shortly…</span>;
+    case 'saved':
+      return (
+        <span className={`${base} text-[var(--success)]`} role="status">
+          All changes saved{status.at ? ` · ${formatIST(deviceToServerMs(status.at), 'time')}` : ''}
+        </span>
+      );
+    case 'incomplete':
+      return (
+        <span className={`${base} text-[var(--warning)]`} role="status">
+          Set the window opening time and duration — then it saves automatically.
+        </span>
+      );
+    case 'error':
+      return (
+        <span className={`${base} text-destructive`} role="alert">
+          Not saved: {status.message}{' '}
+          <button type="button" className="underline underline-offset-2" onClick={onRetry}>
+            Retry
+          </button>
+        </span>
+      );
+    default:
+      return <span className={`${base} text-muted-foreground`}>Changes save automatically.</span>;
+  }
+}
+
 function questionToEdit(q: QuestionEditor): ReturnType<typeof EMPTY_QUESTION> {
   return {
     qtype: q.qtype,
@@ -983,6 +1263,7 @@ function questionToEdit(q: QuestionEditor): ReturnType<typeof EMPTY_QUESTION> {
     answer: q.answer as number | number[] | string,
     tolerance: q.tolerance == null ? '0.01' : String(q.tolerance),
     points: String(q.points),
+    negative_points: String(q.negative_points ?? 0),
     time_limit_seconds: q.time_limit_seconds == null ? '' : String(q.time_limit_seconds),
     allow_assumptions: Boolean(q.allow_assumptions),
     id: q.id,
@@ -994,6 +1275,7 @@ function buildQuestionPayload(q: ReturnType<typeof EMPTY_QUESTION>) {
     qtype: q.qtype,
     text: q.text,
     points: q.points,
+    negative_points: q.qtype === 'descriptive' || q.negative_points.trim() === '' ? 0 : q.negative_points,
     time_limit_seconds: q.time_limit_seconds === '' ? null : Number(q.time_limit_seconds),
     allow_assumptions: q.allow_assumptions,
   };
@@ -1034,14 +1316,35 @@ function QuestionFields({
     <div>
       <input type="hidden" />
       <div className="field">
-        <label htmlFor={fieldId('text')}>Question text (Supports LaTeX e.g. $$x^2$$ and Markdown)</label>
-        <textarea id={fieldId('text')} rows={2} value={q.text} onChange={(e) => set({ text: e.target.value })} />
-        {q.text && (
-          <div style={{ marginTop: '6px', padding: '6px 10px', background: '#f8fafc', borderRadius: '4px', border: '1px dashed #cbd5e1' }}>
-            <span style={{ fontSize: '0.7rem', color: '#64748b' }}>Live Preview:</span>
-            <RichText content={q.text} />
-          </div>
-        )}
+        <label htmlFor={fieldId('text')}>
+          Question text (LaTeX: $x^2$, $$\int_0^1 x\,dx$$, \textbf&#123;…&#125;, \begin&#123;enumerate&#125;… — Markdown **bold** also works)
+        </label>
+        <textarea id={fieldId('text')} rows={3} value={q.text} onChange={(e) => set({ text: e.target.value })} />
+        <div className="mt-2">
+          <LatexPaste
+            onParsed={(p) => {
+              const choice = p.options.length >= 2;
+              const qtype: QuestionType = choice ? (p.correct.length > 1 ? 'multiple' : 'single') : q.qtype;
+              set({
+                text: p.text,
+                ...(choice
+                  ? {
+                      qtype,
+                      options: p.options,
+                      answer: qtype === 'multiple' ? p.correct : (p.correct[0] ?? -1),
+                    }
+                  : {}),
+              });
+              toast.success(
+                choice
+                  ? `Filled the question and ${p.options.length} options${p.correct.length ? '' : ' — now tick the correct one'}.`
+                  : 'Filled the question text.',
+              );
+              if (p.more > 0) toast.info(`Found ${p.more + 1} questions; only the first was used. Paste the others one at a time.`);
+            }}
+          />
+        </div>
+        <RichPreview content={q.text} label="Live preview" />
       </div>
       <div className="field-row">
         <div className="field">
@@ -1061,6 +1364,25 @@ function QuestionFields({
           <label htmlFor={fieldId('points')}>{q.qtype === 'descriptive' ? 'Marks (out of)' : 'Points'}</label>
           <input id={fieldId('points')} type="number" min={0.25} step={0.25} value={q.points} onChange={(e) => set({ points: e.target.value })} />
         </div>
+        {q.qtype !== 'descriptive' && (
+          <div className="field">
+            <label htmlFor={fieldId('negative')}>Negative marks (wrong answer)</label>
+            <input
+              id={fieldId('negative')}
+              type="number"
+              min={0}
+              step={0.25}
+              value={q.negative_points}
+              onChange={(e) => set({ negative_points: e.target.value })}
+              aria-describedby={fieldId('negative-hint')}
+            />
+            <span id={fieldId('negative-hint')} className="muted small">
+              {Number(q.negative_points) > 0
+                ? `Right +${q.points || 0}, wrong −${q.negative_points}, blank 0.`
+                : '0 = no negative marking.'}
+            </span>
+          </div>
+        )}
         {showTimeLimit && (
           <div className="field">
             <label htmlFor={fieldId('time')}>Time limit (seconds)</label>

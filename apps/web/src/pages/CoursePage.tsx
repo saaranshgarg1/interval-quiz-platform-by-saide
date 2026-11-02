@@ -1,3 +1,4 @@
+import { formatIST, windowStatus } from '../lib/time';
 import { useState, useMemo } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
@@ -471,24 +472,35 @@ function QuizCard({
           )}
           {pub?.paused && <Badge variant="warning">Paused</Badge>}
           {pub?.closed && <Badge variant="destructive">Ended</Badge>}
-          {isScheduled && currentVersion?.window_opens_at && (
-            <Badge variant="outline" className="inline-flex items-center gap-1">
-              <Clock className="size-3" aria-hidden="true" />
-              Scheduled: opens {new Date(currentVersion.window_opens_at).toLocaleString()}
-              {currentVersion.window_duration_minutes && ` · ${currentVersion.window_duration_minutes} min`}
-            </Badge>
-          )}
+          {isScheduled && currentVersion?.window_opens_at && (() => {
+            const w = windowStatus(
+              currentVersion.window_opens_at,
+              currentVersion.window_duration_minutes,
+              currentVersion.window_closes_at,
+            );
+            if (!w) return null;
+            return (
+              <Badge
+                variant={w.state === 'open' ? 'success' : w.state === 'closed' ? 'destructive' : 'outline'}
+                className="inline-flex h-auto max-w-full items-center gap-1 whitespace-normal text-left"
+                title={`Window: ${formatIST(w.opensMs)} – ${formatIST(w.closesMs, 'timeShort')}`}
+              >
+                <Clock className="size-3" aria-hidden="true" />
+                {w.label}
+              </Badge>
+            );
+          })()}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-sm text-muted-foreground">
           {pub
-            ? `${pub.question_count} questions · ${pub.duration_minutes ? `${pub.duration_minutes} min` : 'no timer'} · ${PRESET_TEXT[pub.preset] ?? 'custom rules'} · ${pub.show_scores} scores`
+            ? `${pub.question_count} question${pub.question_count === 1 ? '' : 's'} · ${pub.duration_minutes ? `${pub.duration_minutes} min` : 'no timer'} · ${PRESET_TEXT[pub.preset] ?? 'custom rules'} · ${pub.show_scores} scores`
             : `${draft?.question_count ?? 0} questions in draft`}
         </p>
         {pub?.published_at && (
           <p className="text-xs text-muted-foreground">
-            Published {new Date(pub.published_at).toLocaleString()}
+            Published {formatIST(pub.published_at)}
           </p>
         )}
         {hasAttempts && (

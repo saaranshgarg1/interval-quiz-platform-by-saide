@@ -1,3 +1,4 @@
+import { formatIST } from '../lib/time';
 import { useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQueryClient, useQueries } from '@tanstack/react-query';
@@ -153,7 +154,7 @@ function TimeCell({ value }: { value: string | null | undefined }) {
   if (!value) return <span className="text-muted-foreground">—</span>;
   const d = new Date(value.includes('T') ? value : value.replace(' ', 'T') + 'Z');
   if (Number.isNaN(d.getTime())) return <span className="text-muted-foreground">{value}</span>;
-  return <time dateTime={d.toISOString()}>{d.toLocaleString()}</time>;
+  return <time dateTime={d.toISOString()}>{formatIST(d)}</time>;
 }
 
 export function IncidentsPage() {

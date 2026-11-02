@@ -1,3 +1,4 @@
+import { formatIST } from '../../lib/time';
 import { useMemo, useState } from 'react';
 import {
   CheckCircle2,
@@ -172,7 +173,7 @@ export function AttemptTimeline({ audit }: { audit: Audit }) {
               </span>
               <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
                 <time className="font-mono text-xs text-muted-foreground" dateTime={new Date(e.at).toISOString()}>
-                  {new Date(e.at).toLocaleTimeString()} · +{Math.floor(offset / 60)}:{String(offset % 60).padStart(2, '0')}
+                  {formatIST(e.at, 'time')} · +{Math.floor(offset / 60)}:{String(offset % 60).padStart(2, '0')}
                 </time>
                 <span className="font-medium first-letter:uppercase">{e.title}</span>
                 <span className="sr-only">({CATEGORY_TEXT[e.category]})</span>

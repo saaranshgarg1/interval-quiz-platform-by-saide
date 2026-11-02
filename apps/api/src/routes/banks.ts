@@ -78,6 +78,7 @@ function bankQuestionInput(raw: Record<string, unknown>) {
     answer: raw.answer,
     tolerance: raw.tolerance,
     points: raw.points,
+    negative_points: raw.negative_points,
   });
   return {
     qtype: v.qtype,
@@ -86,6 +87,7 @@ function bankQuestionInput(raw: Record<string, unknown>) {
     answer: v.answer,
     tolerance: v.tolerance ?? null,
     points: raw.points != null && raw.points !== '' ? Number(raw.points) : 1,
+    negative_points: v.negative_points ?? 0,
     tags: Array.isArray(raw.tags)
       ? raw.tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 20)
       : typeof raw.tags === 'string'

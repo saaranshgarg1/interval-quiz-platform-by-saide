@@ -1,3 +1,4 @@
+import { formatIST } from '../lib/time';
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Accessibility, DatabaseBackup, LogOut, Search, ShieldCheck, Users } from 'lucide-react';
@@ -279,7 +280,7 @@ export function AdminPage() {
                       </button>
                     </td>
                     <td className="px-3 py-2 text-xs text-muted-foreground">
-                      {new Date(`${u.created_at.replace(' ', 'T')}Z`).toLocaleDateString()}
+                      {formatIST(u.created_at, 'date')}
                     </td>
                     <td className="px-3 py-2 text-right">
                       <ConfirmAction

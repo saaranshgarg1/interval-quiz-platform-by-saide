@@ -1,3 +1,4 @@
+import { formatIST } from '../../lib/time';
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Eye, Flag, ShieldAlert } from 'lucide-react';
@@ -31,7 +32,7 @@ export function FlagLevelBadge({ level, score }: { level: FlagLevel; score?: num
 }
 
 function local(ts: string): string {
-  return new Date(`${ts.replace(' ', 'T')}Z`).toLocaleString();
+  return formatIST(ts);
 }
 
 export function flagReportKey(quizId: number) {

@@ -1,3 +1,4 @@
+import { deviceToServerMs, formatIST, serverMs, serverNow } from '../../lib/time';
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, CheckCircle2, Hand, Megaphone, Pin, X } from 'lucide-react';
@@ -22,7 +23,7 @@ export function useHands(quizId: number) {
 }
 
 const ago = (ts: string) => {
-  const s = Math.max(0, Math.round((Date.now() - new Date(`${ts.replace(' ', 'T')}Z`).getTime()) / 1000));
+  const s = Math.max(0, Math.round((serverNow() - serverMs(ts)) / 1000));
   return s < 60 ? `${s}s ago` : `${Math.round(s / 60)} min ago`;
 };
 
@@ -159,7 +160,7 @@ export function QuestionHealthPanel({ quizId }: { quizId: number }) {
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
-        Refreshes every 20 s · updated {new Date(dataUpdatedAt).toLocaleTimeString()} · correctness uses the current key
+        Refreshes every 20 s · updated {formatIST(deviceToServerMs(dataUpdatedAt), 'time')} · correctness uses the current key
       </p>
       <div className="overflow-x-auto rounded-[var(--radius-lg)] border">
         <table className="w-full border-collapse text-sm">

@@ -21,6 +21,7 @@ import {
   nowUtc,
   fromMs,
   toMs,
+  formatIst,
   jsonParse,
   randomToken,
   randomSeed,
@@ -453,11 +454,13 @@ export function startAttempt(
       throw new AppError(403, 'This scheduled quiz has no availability window set.');
     }
     if (now < opensAt) {
-      throw new AppError(403, `This quiz opens at ${version.window_opens_at} UTC.`, 'not_open', {
+      throw new AppError(403, `This quiz opens at ${formatIst(opensAt)}.`, 'not_open', {
         opens_at: version.window_opens_at,
       });
     }
-    if (now >= closesAt) throw new AppError(403, 'The availability window for this quiz has closed.', 'window_closed');
+    if (now >= closesAt) {
+      throw new AppError(403, `The availability window for this quiz closed at ${formatIst(closesAt)}.`, 'window_closed');
+    }
     if (settings.late_entry_minutes !== null && now > opensAt + settings.late_entry_minutes * 60_000) {
       throw new AppError(
         403,
@@ -663,6 +666,7 @@ export function buildAttemptView(attemptId: number, viewerId?: number): Integral
     text: q.text,
     options: (perms.get(q.id) ?? []).map((i) => q.options[i] ?? ''),
     points: q.points,
+    negative_points: q.negative_points,
     order_index: q.order_index,
     position: positions.get(q.id) ?? 0,
     time_limit_seconds: settings.question_timer === 'off' ? null : limitFor(q, settings),
@@ -729,6 +733,7 @@ export function buildAttemptView(attemptId: number, viewerId?: number): Integral
         duration_minutes: version.duration_minutes,
         question_count: questionRepo.countForVersion(version.id),
         quiz_type: version.quiz_type,
+        negative_marking: questionRepo.hasNegativeMarking(version.id),
       }),
       paused: Boolean(quiz.paused_at),
     },

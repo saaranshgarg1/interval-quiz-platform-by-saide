@@ -35,6 +35,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { RichText } from '@/components/RichText';
+import { LatexPaste, RichPreview } from '@/components/LatexPaste';
 import {
   type ColumnDef,
   type ColumnFiltersState,
@@ -56,6 +57,8 @@ const newBankSchema = z.object({
 const questionBase = {
   text: z.string().min(1, 'Question text is required'),
   points: z.coerce.number().min(0.5, 'Must be at least 0.5').max(100),
+  /** Marks taken off for a wrong answer (0 = none). */
+  negative_points: z.coerce.number().min(0, 'Cannot be below 0').max(100).optional(),
   tags: z.string().optional(),
   difficulty: z.enum(['easy', 'medium', 'hard']),
   allow_assumptions: z.boolean().optional(),
@@ -66,7 +69,11 @@ const difficultyVariant = (d: Difficulty) => (d === 'hard' ? 'destructive' : d =
 
 const choiceSchema = {
   ...questionBase,
-  options: z.array(z.string().trim().min(1, 'Option cannot be empty')).min(2, 'At least 2 options required').max(26),
+  // Blank rows are fine: they are simply not options (the server drops them).
+  options: z
+    .array(z.string())
+    .max(26)
+    .refine((opts) => opts.filter((o) => o.trim() !== '').length >= 2, 'Fill in at least 2 options'),
   tolerance: z.any().optional(),
 };
 
@@ -74,16 +81,16 @@ const singleSchema = z.object({
   ...choiceSchema,
   qtype: z.literal('single'),
   answer: z.number().int().min(0, 'Select a correct option'),
-}).refine((data) => data.answer < data.options.length, {
-  path: ['answer'], message: 'Select a correct option',
+}).refine((data) => data.answer < data.options.length && data.options[data.answer]?.trim() !== '', {
+  path: ['answer'], message: 'Select a correct option that has text',
 });
 
 const multipleSchema = z.object({
   ...choiceSchema,
   qtype: z.literal('multiple'),
   answer: z.array(z.number().int().min(0)).min(1, 'Select at least one correct option'),
-}).refine((data) => data.answer.every((index) => index < data.options.length), {
-  path: ['answer'], message: 'Select valid correct options',
+}).refine((data) => data.answer.every((index) => index < data.options.length && data.options[index]?.trim() !== ''), {
+  path: ['answer'], message: 'Select correct options that have text',
 });
 
 const shortSchema = z.object({
@@ -304,6 +311,7 @@ function NewQuestionForm({
       options: ['', '', '', ''],
       answer: 0,
       points: 1,
+      negative_points: 0,
       tolerance: 0.01,
       tags: '',
       difficulty: 'medium',
@@ -346,6 +354,7 @@ function NewQuestionForm({
         answer: finalAnswer,
         tolerance: qtype === 'numeric' ? data.tolerance : null,
         points: data.points,
+        negative_points: qtype === 'descriptive' ? 0 : (data.negative_points ?? 0),
         difficulty: data.difficulty,
         allow_assumptions: Boolean(data.allow_assumptions),
         tags: data.tags
@@ -414,18 +423,58 @@ function NewQuestionForm({
               />
               {errors.points && <p className="text-sm text-destructive mt-1">{errors.points.message}</p>}
             </div>
+            {qtype !== 'descriptive' && (
+              <div>
+                <Label htmlFor="negative_points">Negative marks (wrong)</Label>
+                <Input
+                  id="negative_points"
+                  type="number"
+                  min="0"
+                  step="0.25"
+                  placeholder="0"
+                  {...register('negative_points')}
+                  aria-invalid={!!errors.negative_points}
+                />
+                {errors.negative_points && (
+                  <p className="text-sm text-destructive mt-1">{errors.negative_points.message}</p>
+                )}
+              </div>
+            )}
           </div>
 
           <div>
-            <Label htmlFor="qtext">Question Text (supports Markdown & LaTeX: e.g. $$x^2 + y^2$$)</Label>
+            <Label htmlFor="qtext">
+              Question Text (LaTeX: $x^2$, $$\int_0^1 x\,dx$$, \textbf&#123;…&#125;, \begin&#123;enumerate&#125;… — Markdown **bold** also works)
+            </Label>
             <Textarea
               id="qtext"
               rows={3}
-              placeholder="e.g. Calculate the integral $\int_0^1 x dx$"
+              placeholder="e.g. Calculate the integral $\int_0^1 x\,dx$"
               {...register('text')}
               aria-invalid={!!errors.text}
             />
             {errors.text && <p className="text-sm text-destructive mt-1">{errors.text.message}</p>}
+            <div className="mt-2">
+              <LatexPaste
+                onParsed={(p) => {
+                  setValue('text', p.text, { shouldValidate: true });
+                  if (p.options.length >= 2) {
+                    const next: QuestionType = p.correct.length > 1 ? 'multiple' : 'single';
+                    setQtype(next);
+                    setValue('qtype', next);
+                    setValue('options', p.options);
+                    setValue('answer', next === 'multiple' ? p.correct : (p.correct[0] ?? 0));
+                  }
+                  toast.success(
+                    p.options.length >= 2
+                      ? `Filled the question and ${p.options.length} options${p.correct.length ? '' : ' — now pick the correct one'}.`
+                      : 'Filled the question text.',
+                  );
+                  if (p.more > 0) toast.info(`Found ${p.more + 1} questions; only the first was used.`);
+                }}
+              />
+            </div>
+            <RichPreview content={watch('text') ?? ''} label="Live preview" />
           </div>
 
           {(qtype === 'single' || qtype === 'multiple') && (

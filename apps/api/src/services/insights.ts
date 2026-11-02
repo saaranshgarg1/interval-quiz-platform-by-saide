@@ -366,6 +366,7 @@ export interface QuestionStat {
   qtype: Question['qtype'];
   text: string;
   points: number;
+  negative_points: number;
   slot_id: number | null;
   bank_id: number | null;
   bank_question_id: number | null;
@@ -382,8 +383,13 @@ export interface QuestionStat {
   correct: number;
   /** Students still waiting for marks (descriptive). */
   pending: number;
-  /** Average share of the marks earned (bonus excluded), over students who were given it. */
+  /** Average share of the marks earned on the answers themselves (before any regrade or bonus). */
   mean_fraction: number | null;
+  /**
+   * Average share of the marks actually awarded, after regrades (full marks,
+   * accepted answers), bonuses and negative marking. Null when dropped.
+   */
+  awarded_fraction: number | null;
   /** Upper-lower discrimination (top 27% vs bottom 27% by total score). */
   discrimination: number | null;
   observed_difficulty: Difficulty | null;
@@ -416,6 +422,8 @@ function statsFor(d: VersionData): QuestionStat[] {
     let pending = 0;
     let fractionSum = 0;
     let fractionN = 0;
+    let awardedSum = 0;
+    let awardedN = 0;
     const topF: number[] = [];
     const bottomF: number[] = [];
     const dist = new Map<string, { count: number; correct: boolean }>();
@@ -426,6 +434,12 @@ function statsFor(d: VersionData): QuestionStat[] {
       if (g.pending) {
         pending++;
         continue;
+      }
+      // What the student was really given (regrade, bonus and negative marks included).
+      const real = gradeQuestion(q, raw, d.manual.get(a.id)?.get(q.id));
+      if (real.points > 0) {
+        awardedSum += real.earned / real.points;
+        awardedN++;
       }
       const f = g.points > 0 ? g.earned / g.points : 0;
       if (f >= 1) correct++;
@@ -461,6 +475,7 @@ function statsFor(d: VersionData): QuestionStat[] {
       qtype: q.qtype,
       text: q.text,
       points: q.points,
+      negative_points: q.negative_points,
       slot_id: q.slot_id ?? null,
       bank_id: q.slot_id ? slotBank.get(q.slot_id) ?? null : null,
       bank_question_id: q.bank_question_id ?? null,
@@ -477,6 +492,7 @@ function statsFor(d: VersionData): QuestionStat[] {
       correct,
       pending,
       mean_fraction: mean === null ? null : round(mean, 3),
+      awarded_fraction: awardedN > 0 ? round(awardedSum / awardedN, 3) : null,
       discrimination,
       observed_difficulty: observed,
       bank_difficulty: bankDifficulty,
@@ -831,39 +847,31 @@ export function createAppeal(userId: number, attemptId: number, body: { kind?: u
   const attempt = attemptRepo.get(attemptId);
   if (!attempt) throw new AppError(404, 'Attempt not found.');
   if (attempt.user_id !== userId) throw new AppError(403, 'Not your attempt.');
-  const kind = String(body.kind ?? '') as AppealKind;
-  if (kind !== 'grading' && kind !== 'integrity') throw new AppError(400, "kind must be 'grading' or 'integrity'.");
+  // Students appeal one question's mark once results are out. (Integrity appeals
+  // were removed; any already filed can still be resolved by staff.)
+  const kind: AppealKind = 'grading';
+  if (body.kind !== undefined && body.kind !== 'grading') {
+    throw new AppError(400, "Appeals are only about a question's mark. Use the appeal button next to that question.");
+  }
   const message = typeof body.message === 'string' ? body.message.trim() : '';
   if (message.length < 10) throw new AppError(400, 'Explain your appeal in at least 10 characters.');
   if (message.length > 2000) throw new AppError(400, 'Appeals are limited to 2000 characters.');
   const version = quizVersionRepo.get(attempt.quiz_version_id);
 
-  let questionId: number | null = null;
-  if (kind === 'grading') {
-    if (!scoreVisible(attempt, version)) {
-      throw new AppError(409, 'You can appeal a mark once your result has been released.');
-    }
-    if (body.question_id !== undefined && body.question_id !== null && body.question_id !== '') {
-      questionId = Number(body.question_id);
-      if (!dealtIds(attempt).includes(questionId)) throw new AppError(400, 'That question is not on your paper.');
-    }
-  } else {
-    const hasCase =
-      attempt.status === 'locked' ||
-      attempt.status === 'under_review' ||
-      attempt.violation_count > 0 ||
-      manualFlagsForAttempt(attempt.id).length > 0 ||
-      attempt.finalize_reason === 'violation_limit' ||
-      attempt.finalize_reason === 'reentry';
-    if (!hasCase) throw new AppError(409, 'There is no integrity decision on this attempt to appeal.');
-    if (attempt.status === 'in_progress') throw new AppError(409, 'Finish the attempt first.');
+  if (!scoreVisible(attempt, version)) {
+    throw new AppError(409, 'You can appeal a mark once your result has been released.');
   }
+  if (body.question_id === undefined || body.question_id === null || body.question_id === '') {
+    throw new AppError(400, 'Choose the question you want to appeal.');
+  }
+  const questionId = Number(body.question_id);
+  if (!dealtIds(attempt).includes(questionId)) throw new AppError(400, 'That question is not on your paper.');
   if (appealRepo.openDuplicate(attempt.id, kind, questionId)) {
     throw new AppError(409, 'You already have an open appeal about this.');
   }
   if (appealRepo.count(attempt.id) >= MAX_APPEALS) throw new AppError(429, 'Appeal limit reached for this attempt.');
   const id = appealRepo.add(attempt.id, userId, kind, questionId, message);
-  policyRepo.log(attempt.id, 'appeal_filed', `${kind === 'grading' ? 'Mark' : 'Integrity'} appeal: ${message.slice(0, 160)}`, 'server');
+  policyRepo.log(attempt.id, 'appeal_filed', `Mark appeal: ${message.slice(0, 160)}`, 'server');
   return appealRepo.get(id) as Appeal;
 }
 

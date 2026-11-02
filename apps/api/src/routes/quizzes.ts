@@ -12,7 +12,7 @@ import {
 import { extensionRepo } from '../exam-repo.js';
 import type { CourseRole, Difficulty, QuizVersion } from '../types.js';
 import { assertStaff, assertMember, assertInstructor, writeAudit } from '../authz.js';
-import { addSecondsTo, dateToUtc } from '../util.js';
+import { addSecondsTo, dateToUtc, formatIst, toMs } from '../util.js';
 import { scoreVisible } from '../services/finalize.js';
 import { parseTimeLimit, validateQuestionData } from '../services/question-validation.js';
 import {
@@ -75,6 +75,7 @@ function versionDetail(versionId: number, viewerId: number, role: CourseRole | '
       duration_minutes: version.duration_minutes,
       question_count: questionCount,
       quiz_type: version.quiz_type,
+      negative_marking: questions.some((q) => q.negative_points > 0) || slots.some((sl) => sl.negative_points > 0),
     }),
     paused: Boolean(quiz?.paused_at),
     closed: Boolean(quiz?.closed_at),
@@ -86,6 +87,7 @@ function versionDetail(versionId: number, viewerId: number, role: CourseRole | '
           text: q.text,
           options: q.options,
           points: q.points,
+          negative_points: q.negative_points,
           order_index: q.order_index,
           answer: q.answer,
           tolerance: q.tolerance,
@@ -97,6 +99,8 @@ function versionDetail(versionId: number, viewerId: number, role: CourseRole | '
       : [],
     // Random slots: a different bank question for each student (staff only).
     slots: isStaff ? slots.map(slotView) : [],
+    // Why this draft can't be published yet (empty = ready). Staff only.
+    publish_problems: isStaff && version.status === 'draft' ? publishProblems(version) : [],
     attempts: isStaff ? summarizeAttemptsForVersion(versionId) : undefined,
     my_attempts: summarizeAttempts(viewerId, version),
   };
@@ -141,6 +145,37 @@ function poolProblems(versionId: number): string[] {
   for (const [bankId, need] of perBank) {
     const have = bankRepo.listQuestions(bankId).length;
     if (need > have) problems.push(`${need} random slots draw from “${bankRepo.get(bankId)?.name ?? bankId}”, which has only ${have} questions.`);
+  }
+  return problems;
+}
+
+/**
+ * Everything that stops this draft from being published, as instructor-facing
+ * sentences. The publish route refuses while this is non-empty, and the editor
+ * shows the same list next to the (disabled) Publish button.
+ */
+function publishProblems(version: QuizVersion): string[] {
+  const itemCount = questionRepo.countForVersion(version.id);
+  if (itemCount === 0) return ['Add at least one question before publishing.'];
+  const problems = poolProblems(version.id).map(
+    (p) => `Not enough bank questions: ${p} Add questions to that bank or remove some random questions from this quiz.`,
+  );
+  const settings = resolveSettings(version);
+  if (settings.questions_per_attempt !== null && settings.questions_per_attempt > itemCount) {
+    problems.push(
+      `The random draw (${settings.questions_per_attempt} per student) is larger than the ${itemCount} questions in this quiz. ` +
+        'Lower "questions per student" in the exam settings or add more questions.',
+    );
+  }
+  // A scheduled window that is already over would publish a quiz nobody can take.
+  if (version.quiz_type === 'scheduled' && version.window_opens_at && version.window_duration_minutes) {
+    const closes = toMs(version.window_opens_at) + version.window_duration_minutes * 60_000;
+    if (closes <= Date.now()) {
+      problems.push(
+        `The availability window already ended at ${formatIst(closes)}, so no student could take this quiz. ` +
+          'Set a later "Window opens at" time (IST) and save the settings.',
+      );
+    }
   }
   return problems;
 }
@@ -415,17 +450,8 @@ quizzesRouter.patch('/:quizId/publish', (req: AuthedRequest, res) => {
   const role = assertInstructor(req, quiz.course_id);
   const draft = quizVersionRepo.latest(quiz.id);
   if (!draft || draft.status !== 'draft') throw new AppError(409, 'No draft version to publish.');
-  const itemCount = questionRepo.countForVersion(draft.id);
-  if (itemCount === 0) throw new AppError(400, 'Add at least one question before publishing.');
-  const problems = poolProblems(draft.id);
-  if (problems.length) throw new AppError(400, `Not enough bank questions: ${problems.join(' ')}`);
-  const settings = resolveSettings(draft);
-  if (settings.questions_per_attempt !== null && settings.questions_per_attempt > itemCount) {
-    throw new AppError(
-      400,
-      `The random draw (${settings.questions_per_attempt} per student) is larger than the ${itemCount} questions in this quiz.`,
-    );
-  }
+  const problems = publishProblems(draft);
+  if (problems.length) throw new AppError(400, problems.join(' '), 'not_publishable', { problems });
   quizVersionRepo.publish(draft.id);
   writeAudit(req, { action: 'quiz.publish', course_id: quiz.course_id, target: 'quiz:' + quiz.id });
   res.json(versionDetail(draft.id, req.userId as number, role));
@@ -455,6 +481,7 @@ quizzesRouter.post('/:quizId/questions', (req: AuthedRequest, res) => {
     answer: v.answer,
     tolerance: v.tolerance,
     points: v.points ?? 1,
+    negative_points: v.negative_points ?? 0,
     time_limit_seconds: parseTimeLimit(req.body.time_limit_seconds) ?? null,
     allow_assumptions: Boolean(req.body.allow_assumptions),
   });
@@ -476,6 +503,7 @@ quizzesRouter.put('/questions/:questionId', (req: AuthedRequest, res) => {
   if (body.answer !== undefined) next.answer = body.answer;
   if (body.tolerance !== undefined) next.tolerance = body.tolerance;
   if (body.points !== undefined) next.points = body.points;
+  if (body.negative_points !== undefined) next.negative_points = body.negative_points;
 
   const v = validateQuestionData(next as never);
   const updated = questionRepo.update(question.id, {
@@ -485,6 +513,7 @@ quizzesRouter.put('/questions/:questionId', (req: AuthedRequest, res) => {
     answer: v.answer,
     tolerance: v.tolerance as number | null,
     points: v.points ?? question.points,
+    negative_points: v.negative_points,
     time_limit_seconds: parseTimeLimit(body.time_limit_seconds),
     allow_assumptions: body.allow_assumptions === undefined ? undefined : Boolean(body.allow_assumptions),
   });
@@ -572,6 +601,10 @@ quizzesRouter.post('/:quizId/slots', (req: AuthedRequest, res) => {
   const tag = typeof body.tag === 'string' && body.tag.trim() ? body.tag.trim().slice(0, 60) : null;
   const points = Number(body.points ?? 1);
   if (!Number.isFinite(points) || points <= 0 || points > 1000) throw new AppError(400, 'Marks must be greater than 0 and at most 1000.');
+  const negative = body.negative_points === undefined || body.negative_points === null || body.negative_points === '' ? 0 : Number(body.negative_points);
+  if (!Number.isFinite(negative) || negative < 0 || negative > 1000) {
+    throw new AppError(400, 'Negative marks must be a number from 0 to 1000 (the marks taken off for a wrong answer).');
+  }
   const count = Number(body.count ?? 1);
   if (!Number.isInteger(count) || count < 1 || count > 100) throw new AppError(400, 'Add between 1 and 100 random questions at a time.');
   const timeLimit = parseTimeLimit(body.time_limit_seconds) ?? null;
@@ -590,7 +623,7 @@ quizzesRouter.post('/:quizId/slots', (req: AuthedRequest, res) => {
     );
   }
   for (let i = 0; i < count; i++) {
-    slotRepo.create(draft.id, { bank_id: bank.id, difficulty, tag, points, time_limit_seconds: timeLimit });
+    slotRepo.create(draft.id, { bank_id: bank.id, difficulty, tag, points, negative_points: negative, time_limit_seconds: timeLimit });
   }
   res.status(201).json(versionDetail(draft.id, req.userId as number, role));
 });
@@ -622,6 +655,7 @@ quizzesRouter.get('/:quizId/preview', (req: AuthedRequest, res) => {
       text: q.text,
       options: q.options,
       points: q.points,
+      negative_points: q.negative_points,
     })),
   });
 });

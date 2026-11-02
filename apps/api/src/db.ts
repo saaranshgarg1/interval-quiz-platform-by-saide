@@ -581,6 +581,17 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_appeals_attempt ON appeals(attempt_id);
     `,
   },
+  {
+    version: 8,
+    name: 'negative_marking',
+    // Marks deducted for a wrong (not blank) auto-graded answer. A random slot's
+    // value is copied onto each question it draws.
+    sql: `
+      ALTER TABLE questions ADD COLUMN negative_points REAL NOT NULL DEFAULT 0;
+      ALTER TABLE bank_questions ADD COLUMN negative_points REAL NOT NULL DEFAULT 0;
+      ALTER TABLE question_slots ADD COLUMN negative_points REAL NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 /** Apply pending migrations in order, each in its own transaction. Idempotent. */

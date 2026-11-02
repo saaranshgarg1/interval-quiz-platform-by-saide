@@ -1,3 +1,4 @@
+import { formatIST } from '../../lib/time';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
@@ -71,7 +72,7 @@ export function CollusionPanel({ versionId }: { versionId: number }) {
         <>
           <p className="text-sm text-muted-foreground">
             Compared {report.pairs_checked.toLocaleString()} pairs across {report.analysed_attempts} papers and{' '}
-            {report.questions_used} questions · {new Date(report.generated_at).toLocaleTimeString()}
+            {report.questions_used} questions · {formatIST(report.generated_at, 'time')}
           </p>
           {report.pairs.length === 0 ? (
             <EmptyState icon={Users} title="No suspicious pairs" description="No pair shared unusual answers beyond what chance explains." />

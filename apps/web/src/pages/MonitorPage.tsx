@@ -1,3 +1,4 @@
+import { formatIST } from '../lib/time';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -127,8 +128,7 @@ function since(ts: string | null, serverNow: number): string {
 }
 
 function local(ts: string | null): string {
-  if (!ts) return '—';
-  return new Date(`${ts.replace(' ', 'T')}Z`).toLocaleString();
+  return formatIST(ts);
 }
 
 type AttemptActionKind =
@@ -595,7 +595,7 @@ export function MonitorPage() {
                         <span className="text-muted-foreground">{e.entry_number ?? ''}</span>
                       </button>
                       <div className={EVENT_TONE[e.kind] ?? 'text-muted-foreground'}>{e.detail ?? e.kind}</div>
-                      <div className="text-muted-foreground">{new Date(`${e.recorded_at.replace(' ', 'T')}Z`).toLocaleTimeString()}</div>
+                      <div className="text-muted-foreground">{formatIST(e.recorded_at, 'time')}</div>
                     </li>
                   ))}
                 </ul>

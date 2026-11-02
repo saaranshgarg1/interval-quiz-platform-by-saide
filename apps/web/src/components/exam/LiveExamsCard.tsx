@@ -1,3 +1,4 @@
+import { formatIST, serverMs, serverNow } from '../../lib/time';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Activity, CalendarClock, Flag, Lock, Pause, Radio, Wifi } from 'lucide-react';
@@ -9,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui
 
 function local(ts: string | null): string {
   if (!ts) return '';
-  return new Date(`${ts.replace(' ', 'T')}Z`).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  return formatIST(ts);
 }
 
 /** Staff: every quiz running right now across all their courses (several can be live at once). */
@@ -90,7 +91,7 @@ export function LiveExamsCard() {
 
 /** Students: scheduled quizzes that are open now or coming up, soonest first. */
 export function UpcomingExamsCard({ courses }: { courses: { code: string; quizzes: QuizList[] }[] }) {
-  const now = Date.now();
+  const now = serverNow();
   const items = courses
     .flatMap((c) =>
       c.quizzes
@@ -99,8 +100,8 @@ export function UpcomingExamsCard({ courses }: { courses: { code: string; quizze
           course: c.code,
           quizId: q.quiz_id,
           title: q.published!.title,
-          opens: new Date(`${q.published!.window_opens_at!.replace(' ', 'T')}Z`).getTime(),
-          closes: new Date(`${q.published!.window_closes_at!.replace(' ', 'T')}Z`).getTime(),
+          opens: serverMs(q.published!.window_opens_at!),
+          closes: serverMs(q.published!.window_closes_at!),
           duration: q.published!.duration_minutes,
           inProgress: q.published!.my_attempts?.in_progress ?? null,
           done: (q.published!.my_attempts?.count ?? 0) >= q.published!.attempts_allowed,
@@ -151,7 +152,7 @@ export function UpcomingExamsCard({ courses }: { courses: { code: string; quizze
 }
 
 function fmtMs(ms: number): string {
-  return new Date(ms).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  return formatIST(ms);
 }
 
 function formatIn(ms: number): string {

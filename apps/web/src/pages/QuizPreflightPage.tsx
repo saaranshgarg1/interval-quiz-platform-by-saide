@@ -1,3 +1,4 @@
+import { formatIST, serverMs, serverNow } from '../lib/time';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { motion, useReducedMotion } from 'framer-motion';
@@ -16,7 +17,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useQuiz } from '../lib/queries';
-import { api, ApiError, withNetworkRetry } from '../api';
+import { api, apiUrl, ApiError, withNetworkRetry } from '../api';
 import type { AttemptSessionResponse, PublicExamSettings, VersionDetail } from '../types';
 import { Page, EmptyState, ErrorState, LoadingSkeleton } from '../components/primitives';
 import { Badge } from '@/components/ui/badge';
@@ -37,8 +38,7 @@ const PRESET_LABEL: Record<string, string> = {
 
 function toLocal(ts: string | null): string {
   if (!ts) return '';
-  const d = new Date(ts.includes('T') ? ts : `${ts.replace(' ', 'T')}Z`);
-  return Number.isNaN(d.getTime()) ? ts : d.toLocaleString();
+  return formatIST(ts);
 }
 
 interface Check {
@@ -55,7 +55,7 @@ function useSystemCheck(settings: PublicExamSettings | null, enabled: boolean): 
     if (!enabled) return;
     let cancelled = false;
     const t0 = performance.now();
-    fetch('/api/health', { cache: 'no-store' })
+    fetch(apiUrl('/health'), { cache: 'no-store' })
       .then((r) => {
         if (!cancelled) {
           if (r.ok) setLatency(Math.round(performance.now() - t0));
@@ -153,8 +153,8 @@ export function QuizPreflightPage() {
   const attemptsUsed = my?.count ?? 0;
   const attemptsRemaining = version.attempts_allowed - attemptsUsed;
   const needsCode = 'requires_access_code' in settings ? settings.requires_access_code : Boolean((settings as { access_code?: string }).access_code);
-  const opensAt = version.window_opens_at ? new Date(`${version.window_opens_at.replace(' ', 'T')}Z`).getTime() : null;
-  const notYetOpen = version.quiz_type === 'scheduled' && opensAt !== null && Date.now() < opensAt;
+  const opensAt = version.window_opens_at ? serverMs(version.window_opens_at) : null;
+  const notYetOpen = version.quiz_type === 'scheduled' && opensAt !== null && serverNow() < opensAt;
   const canStart =
     isStudent &&
     !my?.in_progress &&

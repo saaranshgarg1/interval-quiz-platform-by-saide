@@ -1,3 +1,5 @@
+import { plainText } from '../../lib/latex';
+import { marksLabel } from '../../lib/marks';
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, ChevronDown, ChevronRight, ListChecks, Scale, Wand2 } from 'lucide-react';
@@ -96,8 +98,8 @@ export function QuestionsPanel({ versionId, onChanged }: { versionId: number; on
             {suggestions.map((q) => (
               <div key={q.question_id} className="flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border px-3 py-2 text-sm">
                 <span className="font-mono">{q.label}</span>
-                <span className="min-w-0 flex-1 truncate text-muted-foreground" title={q.text}>
-                  {q.text}
+                <span className="min-w-0 flex-1 truncate text-muted-foreground" title={plainText(q.text)}>
+                  {plainText(q.text)}
                 </span>
                 <span>
                   rated <DifficultyBadge value={q.bank_difficulty} />, students scored {pct(q.mean_fraction)} → plays{' '}
@@ -173,10 +175,10 @@ function QuestionRow({
             <span>
               <span className="font-mono font-medium">{q.label}</span>{' '}
               <span className="text-muted-foreground">
-                {q.qtype} · {q.points} pt
+                {q.qtype} · {marksLabel(q.points, q.negative_points)}
               </span>
-              <span className="block max-w-[22rem] truncate text-muted-foreground" title={q.text}>
-                {q.text}
+              <span className="block max-w-[22rem] truncate text-muted-foreground" title={plainText(q.text)}>
+                {plainText(q.text)}
               </span>
             </span>
           </button>
@@ -191,7 +193,14 @@ function QuestionRow({
           {q.dealt}
           {q.pending > 0 && <span className="block text-xs text-warning">{q.pending} unmarked</span>}
         </td>
-        <td className="px-3 py-2 font-mono tabular-nums">{pct(q.mean_fraction)}</td>
+        <td className="px-3 py-2 font-mono tabular-nums">
+          {q.grading_mode === 'dropped' ? 'dropped' : pct(q.awarded_fraction ?? q.mean_fraction)}
+          {q.awarded_fraction != null && q.mean_fraction != null && Math.abs(q.awarded_fraction - q.mean_fraction) >= 0.005 && (
+            <span className="block font-sans text-xs text-muted-foreground" title="What the answers themselves earned, before the regrade or bonus. Difficulty and discrimination use this.">
+              {pct(q.mean_fraction)} before regrade
+            </span>
+          )}
+        </td>
         <td className="px-3 py-2 font-mono tabular-nums">{q.discrimination === null ? '—' : q.discrimination.toFixed(2)}</td>
         <td className="px-3 py-2">
           <DifficultyBadge value={q.observed_difficulty} />

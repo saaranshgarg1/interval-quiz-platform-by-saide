@@ -118,10 +118,13 @@ export function gradeQuestion(q: Question, rawAnswer: unknown, manual?: ManualMa
   } else if (q.qtype === 'descriptive') {
     return { ...base, correct: false, earned: 0, points, source: 'pending', pending: true };
   } else {
-    earned = isAnswerCorrect(q, rawAnswer) ? points : 0;
+    // Negative marking: a wrong (not blank) auto-graded answer loses `negative_points`.
+    const penalty = Math.max(0, Number(q.negative_points) || 0);
+    earned = isAnswerCorrect(q, rawAnswer) ? points : -penalty;
     source = 'auto';
   }
-  const bonus = q.bonus > 0 ? Math.min(q.bonus, points - earned) : 0;
+  // A fairness bonus tops up to full marks at most; it never offsets a penalty beyond that.
+  const bonus = q.bonus > 0 ? Math.min(q.bonus, points - Math.max(0, earned)) : 0;
   return {
     ...base,
     correct: earned >= points,

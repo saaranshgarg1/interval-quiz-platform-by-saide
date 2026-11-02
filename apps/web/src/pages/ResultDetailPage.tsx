@@ -93,7 +93,7 @@ export function ResultDetailPage() {
   });
 
   const result = response?.result ?? null;
-  const [appealTarget, setAppealTarget] = useState<{ kind: 'grading' | 'integrity'; questionId?: number; label?: string } | null>(null);
+  const [appealTarget, setAppealTarget] = useState<{ kind: 'grading'; questionId: number; label: string } | null>(null);
   const { data: myAppeals } = useMyAppeals(attemptIdNum);
   const appealedQuestions = new Set((myAppeals?.appeals ?? []).filter((a) => a.status === 'open').map((a) => a.question_id));
 
@@ -393,9 +393,6 @@ export function ResultDetailPage() {
               <ArrowLeft />
               All results
             </Link>
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => setAppealTarget({ kind: 'integrity' })}>
-            Disagree with a flag or lock on this attempt?
           </Button>
         </div>
       </div>

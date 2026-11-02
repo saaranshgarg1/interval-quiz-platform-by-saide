@@ -51,6 +51,7 @@ function mapQuestion(row: Record<string, unknown>): Question {
     answer: row.answer != null ? JSON.parse(String(row.answer)) : null,
     tolerance: row.tolerance == null ? null : Number(row.tolerance),
     points: Number(row.points),
+    negative_points: Number(row.negative_points ?? 0),
     order_index: Number(row.order_index),
     is_latest: Number(row.is_latest),
     time_limit_seconds: row.time_limit_seconds == null ? null : Number(row.time_limit_seconds),
@@ -363,17 +364,27 @@ function cloneVersionRow(
 function copyQuestions(fromVersionId: number, toVersionId: number): void {
   for (const slot of slotRepo.listForVersion(fromVersionId)) {
     db.prepare(
-      `INSERT INTO question_slots (quiz_version_id, bank_id, difficulty, tag, points, time_limit_seconds, order_index)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run(toVersionId, slot.bank_id, slot.difficulty, slot.tag, slot.points, slot.time_limit_seconds, slot.order_index);
+      `INSERT INTO question_slots
+         (quiz_version_id, bank_id, difficulty, tag, points, negative_points, time_limit_seconds, order_index)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      toVersionId,
+      slot.bank_id,
+      slot.difficulty,
+      slot.tag,
+      slot.points,
+      slot.negative_points,
+      slot.time_limit_seconds,
+      slot.order_index,
+    );
   }
   const sourceQuestions = questionRepo.listAuthored(fromVersionId);
   for (const q of sourceQuestions) {
     db.prepare(
       `INSERT INTO questions
          (quiz_version_id, version, qtype, text, options, answer, tolerance, points, order_index, time_limit_seconds,
-          allow_assumptions)
-       VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          allow_assumptions, negative_points)
+       VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       toVersionId,
       q.qtype,
@@ -385,6 +396,7 @@ function copyQuestions(fromVersionId: number, toVersionId: number): void {
       q.order_index,
       q.time_limit_seconds,
       q.allow_assumptions,
+      q.negative_points,
     );
   }
 }
@@ -609,6 +621,7 @@ export interface QuestionInput {
   answer: unknown;
   tolerance?: number | null;
   points: number;
+  negative_points?: number;
   time_limit_seconds?: number | null;
   allow_assumptions?: boolean;
 }
@@ -638,6 +651,16 @@ export const questionRepo = {
       .get(quizVersionId, quizVersionId) as { n: number };
     return Number(row.n);
   },
+  /** Does any question or random slot on this version take marks off for a wrong answer? */
+  hasNegativeMarking(quizVersionId: number): boolean {
+    const row = db
+      .prepare(
+        `SELECT EXISTS(SELECT 1 FROM questions WHERE quiz_version_id = ? AND slot_id IS NULL AND negative_points > 0)
+             OR EXISTS(SELECT 1 FROM question_slots WHERE quiz_version_id = ? AND negative_points > 0) AS yes`,
+      )
+      .get(quizVersionId, quizVersionId) as { yes: number };
+    return Boolean(row.yes);
+  },
   /** Next free position, shared by questions and slots. */
   nextOrderIndex(quizVersionId: number): number {
     const row = db
@@ -661,8 +684,8 @@ export const questionRepo = {
       .prepare(
         `INSERT INTO questions
            (quiz_version_id, qtype, text, options, answer, tolerance, points, order_index, time_limit_seconds,
-            allow_assumptions)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            allow_assumptions, negative_points)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         quizVersionId,
@@ -675,6 +698,7 @@ export const questionRepo = {
         next,
         data.time_limit_seconds ?? null,
         data.allow_assumptions ? 1 : 0,
+        data.negative_points ?? 0,
       );
     return questionRepo.get(Number(res.lastInsertRowid)) as Question;
   },
@@ -687,6 +711,7 @@ export const questionRepo = {
       answer: unknown;
       tolerance: number | null;
       points: number;
+      negative_points: number;
       time_limit_seconds: number | null;
       allow_assumptions: boolean;
       grading_mode: Question['grading_mode'];
@@ -719,6 +744,10 @@ export const questionRepo = {
     if (data.points !== undefined) {
       sets.push('points = ?');
       args.push(data.points);
+    }
+    if (data.negative_points !== undefined) {
+      sets.push('negative_points = ?');
+      args.push(data.negative_points);
     }
     if (data.time_limit_seconds !== undefined) {
       sets.push('time_limit_seconds = ?');
@@ -1149,6 +1178,7 @@ function mapBankQuestion(row: Record<string, unknown>): BankQuestion {
     answer: jsonParse<unknown>(row.answer as string, ''),
     tolerance: row.tolerance != null ? Number(row.tolerance) : null,
     points: Number(row.points ?? 1),
+    negative_points: Number(row.negative_points ?? 0),
     tags: jsonParse<string[]>(row.tags as string | null, []),
     difficulty: (row.difficulty as Difficulty) ?? 'medium',
     allow_assumptions: Number(row.allow_assumptions ?? 0),
@@ -1201,6 +1231,7 @@ export const bankRepo = {
       answer: unknown;
       tolerance?: number | null;
       points?: number;
+      negative_points?: number;
       tags?: string[];
       difficulty?: Difficulty;
       allow_assumptions?: boolean;
@@ -1209,8 +1240,9 @@ export const bankRepo = {
     const res = db
       .prepare(
         `INSERT INTO bank_questions
-           (bank_id, qtype, text, options, answer, tolerance, points, tags, difficulty, created_at, allow_assumptions)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (bank_id, qtype, text, options, answer, tolerance, points, tags, difficulty, created_at, allow_assumptions,
+            negative_points)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         bankId,
@@ -1224,6 +1256,7 @@ export const bankRepo = {
         q.difficulty ?? 'medium',
         nowUtc(),
         q.allow_assumptions ? 1 : 0,
+        q.negative_points ?? 0,
       );
     const row = db
       .prepare('SELECT * FROM bank_questions WHERE id = ?')
@@ -1272,6 +1305,7 @@ function mapSlot(row: Record<string, unknown>): QuestionSlot {
     difficulty: (row.difficulty as Difficulty | null) ?? null,
     tag: row.tag == null ? null : String(row.tag),
     points: Number(row.points),
+    negative_points: Number(row.negative_points ?? 0),
     time_limit_seconds: row.time_limit_seconds == null ? null : Number(row.time_limit_seconds),
     order_index: Number(row.order_index),
     created_at: String(row.created_at),
@@ -1290,14 +1324,31 @@ export const slotRepo = {
   },
   create(
     quizVersionId: number,
-    s: { bank_id: number; difficulty: Difficulty | null; tag: string | null; points: number; time_limit_seconds: number | null },
+    s: {
+      bank_id: number;
+      difficulty: Difficulty | null;
+      tag: string | null;
+      points: number;
+      negative_points?: number;
+      time_limit_seconds: number | null;
+    },
   ): QuestionSlot {
     const res = db
       .prepare(
-        `INSERT INTO question_slots (quiz_version_id, bank_id, difficulty, tag, points, time_limit_seconds, order_index)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO question_slots
+           (quiz_version_id, bank_id, difficulty, tag, points, negative_points, time_limit_seconds, order_index)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(quizVersionId, s.bank_id, s.difficulty, s.tag, s.points, s.time_limit_seconds, questionRepo.nextOrderIndex(quizVersionId));
+      .run(
+        quizVersionId,
+        s.bank_id,
+        s.difficulty,
+        s.tag,
+        s.points,
+        s.negative_points ?? 0,
+        s.time_limit_seconds,
+        questionRepo.nextOrderIndex(quizVersionId),
+      );
     return slotRepo.get(Number(res.lastInsertRowid)) as QuestionSlot;
   },
   remove(id: number): void {
@@ -1320,8 +1371,8 @@ export const slotRepo = {
       .prepare(
         `INSERT INTO questions
            (quiz_version_id, qtype, text, options, answer, tolerance, points, order_index, time_limit_seconds,
-            slot_id, bank_question_id, draw_count, allow_assumptions)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+            slot_id, bank_question_id, draw_count, allow_assumptions, negative_points)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
       )
       .run(
         slot.quiz_version_id,
@@ -1336,6 +1387,7 @@ export const slotRepo = {
         slot.id,
         bankQuestion.id,
         bankQuestion.allow_assumptions,
+        bankQuestion.qtype === 'descriptive' ? 0 : slot.negative_points,
       );
     return Number(res.lastInsertRowid);
   },

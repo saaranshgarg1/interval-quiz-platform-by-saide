@@ -33,7 +33,7 @@ export function AppealDialog({
   onClose,
 }: {
   attemptId: number;
-  target: { kind: 'grading' | 'integrity'; questionId?: number; label?: string } | null;
+  target: { kind: 'grading'; questionId: number; label: string } | null;
   onClose: () => void;
 }) {
   const qc = useQueryClient();
@@ -44,8 +44,8 @@ export function AppealDialog({
     setBusy(true);
     try {
       await api.post(`/insights/attempt/${attemptId}/appeals`, {
-        kind: target.kind,
-        question_id: target.questionId ?? null,
+        kind: 'grading',
+        question_id: target.questionId,
         message,
       });
       toast.success('Appeal sent', { description: 'You will see the decision on this page.' });
@@ -63,12 +63,11 @@ export function AppealDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            {target.kind === 'grading' ? `Appeal the mark for ${target.label ?? 'this question'}` : 'Appeal an integrity decision'}
+            Appeal the mark for {target.label}
           </DialogTitle>
           <DialogDescription>
-            {target.kind === 'grading'
-              ? 'Explain why you think your answer deserves more marks (for example, another option is also correct, or your assumption was reasonable).'
-              : 'Explain what happened (for example, a power cut or a browser problem). Your instructor sees your attempt timeline alongside this.'}
+            Explain why you think your answer deserves more marks (for example, another option is also correct, or your
+            assumption was reasonable). Your instructor replies on this page.
           </DialogDescription>
         </DialogHeader>
         <Textarea rows={5} maxLength={2000} value={message} onChange={(e) => setMessage(e.target.value)} autoFocus aria-label="Your appeal" />

@@ -398,7 +398,7 @@ export const EVENT_LABELS: Record<string, string> = {
  */
 export function studentRules(
   s: ExamSettings,
-  meta: { duration_minutes: number | null; question_count: number; quiz_type?: string },
+  meta: { duration_minutes: number | null; question_count: number; quiz_type?: string; negative_marking?: boolean },
 ): string[] {
   const rules: string[] = [];
   const n = s.questions_per_attempt && s.questions_per_attempt < meta.question_count
@@ -409,6 +409,9 @@ export function studentRules(
       ? `You will get ${n} questions drawn at random from a pool of ${meta.question_count}.`
       : `There ${n === 1 ? 'is 1 question' : `are ${n} questions`}.`,
   );
+  if (meta.negative_marking) {
+    rules.push('Negative marking: a wrong answer loses marks (shown on each question). A question you leave blank scores 0.');
+  }
   if (meta.duration_minutes) {
     rules.push(`You have ${meta.duration_minutes} minutes. The timer runs on the server and does not stop if you close the page.`);
   }

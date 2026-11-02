@@ -88,6 +88,8 @@ export interface Question {
   answer: unknown;
   tolerance: number | null;
   points: number;
+  /** Marks deducted for a wrong (not blank) auto-graded answer. 0 = no negative marking. */
+  negative_points: number;
   order_index: number;
   is_latest: number;
   time_limit_seconds: number | null;
@@ -114,6 +116,7 @@ export interface QuestionSlot {
   difficulty: Difficulty | null;
   tag: string | null;
   points: number;
+  negative_points: number;
   time_limit_seconds: number | null;
   order_index: number;
   created_at: string;
@@ -230,6 +233,7 @@ export interface BankQuestion {
   answer: unknown;
   tolerance: number | null;
   points: number;
+  negative_points: number;
   tags: string[];
   difficulty: Difficulty;
   allow_assumptions: number;

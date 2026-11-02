@@ -92,6 +92,8 @@ export interface QuestionEditor {
   text: string;
   options: string[];
   points: number;
+  /** Marks taken off for a wrong (not blank) answer; 0 = none. */
+  negative_points?: number;
   order_index: number;
   answer: unknown;
   tolerance: number | null;
@@ -143,6 +145,8 @@ export interface VersionDetail {
   questions: QuestionEditor[];
   /** Staff only: random questions drawn per student from a bank. */
   slots: QuestionSlot[];
+  /** Drafts only (staff): why the server would refuse to publish. Empty = ready. */
+  publish_problems?: string[];
   my_attempts?: MyAttemptSummary;
   attempts?: {
     total: number;
@@ -179,6 +183,8 @@ export interface AttemptQuestion {
   /** In this student's display order. */
   options: string[];
   points: number;
+  /** Marks taken off for a wrong (not blank) answer; 0 = none. */
+  negative_points?: number;
   order_index: number;
   /** 0-based position within this attempt. */
   position: number;
@@ -425,6 +431,7 @@ export interface BankQuestion {
   answer: unknown;
   tolerance: number | null;
   points: number;
+  negative_points?: number;
   tags: string[];
   difficulty: Difficulty;
   allow_assumptions?: number;
@@ -440,6 +447,7 @@ export interface QuestionSlot {
   difficulty: Difficulty | null;
   tag: string | null;
   points: number;
+  negative_points?: number;
   time_limit_seconds: number | null;
   order_index: number;
   /** How many bank questions match the slot's filter right now. */
@@ -764,6 +772,9 @@ export interface QuestionStat {
   correct: number;
   pending: number;
   mean_fraction: number | null;
+  /** After regrades, bonuses and negative marking (null when dropped). */
+  awarded_fraction?: number | null;
+  negative_points?: number;
   discrimination: number | null;
   observed_difficulty: Difficulty | null;
   bank_difficulty: Difficulty | null;

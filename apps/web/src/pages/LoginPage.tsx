@@ -6,7 +6,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { motion, useReducedMotion } from 'framer-motion';
 import { Lock, Mail, ArrowRight, Loader2, Info, Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../auth';
-import { ApiError } from '../api';
+import { api, ApiError } from '../api';
 import { Logo } from '../components/Logo';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,6 +18,56 @@ const schema = z.object({
 });
 
 type FormData = z.infer<typeof schema>;
+
+interface GoogleConfig {
+  enabled: boolean;
+  client_id: string | null;
+  allowed_domain: string;
+  reason: string | null;
+}
+
+type GoogleState =
+  | { status: 'loading' }
+  | { status: 'ready'; clientId: string; domain: string }
+  | { status: 'disabled'; reason: string };
+
+interface GoogleIdentity {
+  accounts?: {
+    id?: {
+      initialize: (config: Record<string, unknown>) => void;
+      renderButton: (el: HTMLElement, options: Record<string, unknown>) => void;
+    };
+  };
+}
+
+let googleScript: Promise<void> | null = null;
+
+/** Load Google Identity Services once; rejects on network block or a 10 s timeout. */
+function loadGoogleScript(): Promise<void> {
+  if ((window as unknown as { google?: GoogleIdentity }).google?.accounts?.id) return Promise.resolve();
+  if (googleScript) return googleScript;
+  googleScript = new Promise<void>((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.setAttribute('data-gis-script', 'true');
+    const timer = window.setTimeout(() => reject(new Error('timeout')), 10_000);
+    script.onload = () => {
+      window.clearTimeout(timer);
+      if ((window as unknown as { google?: GoogleIdentity }).google?.accounts?.id) resolve();
+      else reject(new Error('gis missing'));
+    };
+    script.onerror = () => {
+      window.clearTimeout(timer);
+      reject(new Error('blocked'));
+    };
+    document.head.appendChild(script);
+  }).catch((err) => {
+    googleScript = null; // allow a retry on the next visit
+    throw err;
+  });
+  return googleScript;
+}
 
 /** Inline Google "G" glyph — no emoji, no external brand icon dependency. */
 function GoogleGlyph({ className }: { className?: string }) {
@@ -59,8 +109,8 @@ export function LoginPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const googleReady = useRef(false);
-  const googleScriptLoaded = useRef(false);
+  const [google, setGoogle] = useState<GoogleState>({ status: 'loading' });
+  const googleButton = useRef<HTMLDivElement | null>(null);
 
   const {
     register,
@@ -117,79 +167,86 @@ export function LoginPage() {
         }
       : { initial: undefined, animate: undefined, transition: undefined };
 
-  const googleClientId = (import.meta as ImportMeta & { env: { VITE_GOOGLE_CLIENT_ID?: string } })
-    .env.VITE_GOOGLE_CLIENT_ID;
-
-  // Load Google Identity Services script once.
+  /**
+   * Google sign-in is offered only when it can actually work here: the server
+   * must have it configured for this web address, and Google's script must
+   * load. Otherwise the button is shown disabled with the reason, so nobody
+   * goes through Google just to be told it failed.
+   */
   useEffect(() => {
-    if (googleScriptLoaded.current) return;
-    if (typeof document === 'undefined') return;
+    let cancelled = false;
+    const disable = (reason: string) => !cancelled && setGoogle({ status: 'disabled', reason });
 
-    const existing = document.querySelector('script[data-gis-script]');
-    if (existing) {
-      googleScriptLoaded.current = true;
-      return;
-    }
+    (async () => {
+      let config: GoogleConfig;
+      try {
+        const res = await api.get<{ google: GoogleConfig }>(
+          `/auth/config?origin=${encodeURIComponent(window.location.origin)}`,
+        );
+        config = res.google;
+      } catch {
+        return disable('Google sign-in is unavailable right now. Use your email and password.');
+      }
+      if (!config.enabled || !config.client_id) {
+        return disable(config.reason ?? 'Google sign-in is turned off. Use your email and password.');
+      }
+      try {
+        await loadGoogleScript();
+      } catch {
+        return disable(
+          'Google sign-in could not load (your network or browser is blocking accounts.google.com). Use your email and password.',
+        );
+      }
+      if (cancelled) return;
+      setGoogle({ status: 'ready', clientId: config.client_id, domain: config.allowed_domain });
+    })();
 
-    const script = document.createElement('script');
-    script.src = 'https://accounts.google.com/gsi/client';
-    script.async = true;
-    script.defer = true;
-    script.setAttribute('data-gis-script', 'true');
-    document.head.appendChild(script);
-    googleScriptLoaded.current = true;
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Initialize Google button when script + client id are available.
+  // Render Google's button once the config and script are ready.
   useEffect(() => {
-    if (!googleClientId) return;
-    if (googleReady.current) return;
-
-    const timer = window.setTimeout(() => {
-      const google = (window as unknown as Record<string, unknown>).google;
-      if (!google || typeof (google as { accounts?: unknown }).accounts !== 'object') {
-        return;
-      }
-
-      const accounts = (
-        google as {
-          accounts: {
-            id?: {
-              initialize: (...args: unknown[]) => void;
-              renderButton: (...args: unknown[]) => void;
-            };
-          };
-        }
-      ).accounts;
-      if (!accounts?.id) return;
-
-      accounts.id.initialize({
-        client_id: googleClientId,
-        callback: async (response: { credential?: string }) => {
-          if (!response?.credential) return;
-          try {
-            await sso(response.credential);
-            navigate('/');
-          } catch {
-            setFormError('Google sign-in failed.');
+    if (google.status !== 'ready' || !googleButton.current) return;
+    const gis = (window as unknown as { google?: GoogleIdentity }).google?.accounts?.id;
+    if (!gis) {
+      setGoogle({ status: 'disabled', reason: 'Google sign-in could not start. Use your email and password.' });
+      return;
+    }
+    gis.initialize({
+      client_id: google.clientId,
+      // Only offer accounts from the allowed domain in Google's account chooser.
+      hd: google.domain,
+      callback: async (response: { credential?: string }) => {
+        if (!response?.credential) return;
+        setFormError(null);
+        try {
+          await sso(response.credential);
+          navigate('/');
+        } catch (err) {
+          if (err instanceof ApiError && (err.status === 503 || err.message === 'Invalid Google ID token.')) {
+            // A server/config problem: retrying can't succeed, so turn the button off.
+            setGoogle({
+              status: 'disabled',
+              reason: 'Google sign-in is not working on this server right now. Use your email and password.',
+            });
+          } else if (err instanceof ApiError) {
+            // e.g. "Only iitrpr.ac.in accounts are allowed." — another account may work.
+            setFormError(`Google sign-in: ${err.message} Choose your @${google.domain} account, or use your email and password.`);
+          } else {
+            setFormError('Could not reach the server to finish Google sign-in. Check your connection and try again.');
           }
-        },
-      });
-
-      const buttonEl = document.getElementById('google-sso-button');
-      if (buttonEl) {
-        accounts.id.renderButton(buttonEl, {
-          theme: 'outline',
-          width: '100%',
-          size: 'large',
-        });
-      }
-
-      googleReady.current = true;
-    }, 300);
-
-    return () => window.clearTimeout(timer);
-  }, [googleClientId, sso, navigate]);
+        }
+      },
+    });
+    gis.renderButton(googleButton.current, {
+      theme: 'outline',
+      size: 'large',
+      text: 'continue_with',
+      width: Math.min(400, Math.max(200, googleButton.current.offsetWidth || 320)),
+    });
+  }, [google, sso, navigate]);
 
   // Fine ruled-paper texture for the masthead — token-derived, very low contrast.
   const ruledPaper = {
@@ -379,28 +436,40 @@ export function LoginPage() {
             </div>
 
             <div className="mt-5">
-              {googleClientId ? (
-                <div
-                  id="google-sso-button"
-                  className="flex items-center justify-center rounded-[var(--radius-md)]"
-                />
+              {google.status === 'ready' ? (
+                <>
+                  <div
+                    id="google-sso-button"
+                    ref={googleButton}
+                    className="flex min-h-[44px] w-full items-center justify-center rounded-[var(--radius-md)]"
+                  />
+                  <p className="mt-2 text-center text-xs text-muted-foreground">
+                    Google sign-in is for @{google.domain} accounts only.
+                  </p>
+                </>
               ) : (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="w-full"
-                  disabled
-                  aria-disabled="true"
-                  aria-describedby="google-sso-note"
-                >
-                  <GoogleGlyph className="size-4" />
-                  Google sign-in not configured
-                </Button>
-              )}
-              {!googleClientId && (
-                <p id="google-sso-note" className="mt-2 text-center text-xs text-muted-foreground">
-                  Google sign-in is disabled in this environment.
-                </p>
+                <>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="w-full"
+                    disabled
+                    aria-disabled="true"
+                    aria-describedby="google-sso-note"
+                  >
+                    {google.status === 'loading' ? (
+                      <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <GoogleGlyph className="size-4" />
+                    )}
+                    {google.status === 'loading' ? 'Checking Google sign-in…' : 'Google sign-in unavailable'}
+                  </Button>
+                  {google.status === 'disabled' && (
+                    <p id="google-sso-note" role="status" className="mt-2 text-center text-xs text-muted-foreground">
+                      {google.reason}
+                    </p>
+                  )}
+                </>
               )}
             </div>
           </div>

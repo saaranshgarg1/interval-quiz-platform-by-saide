@@ -1,3 +1,5 @@
+import { marksLabel, marksSentence } from '../lib/marks';
+import { formatIST } from '../lib/time';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { motion, useReducedMotion } from 'framer-motion';
@@ -866,7 +868,12 @@ export function AttemptPage() {
               <Badge variant="secondary" className="capitalize">
                 {q.qtype === 'multiple' ? 'Select all that apply' : q.qtype === 'descriptive' ? 'Written answer' : q.qtype}
               </Badge>
-              <Badge variant="secondary">{q.points} pt</Badge>
+              <Badge variant="secondary" title={marksSentence(q.points, q.negative_points)}>
+                {marksLabel(q.points, q.negative_points)}
+              </Badge>
+              {(q.negative_points ?? 0) > 0 && (
+                <span className="text-xs text-muted-foreground">Wrong answer: −{q.negative_points}. Blank: 0.</span>
+              )}
             </div>
             <CardTitle className="mt-2">
               <RichText content={q.text} />
@@ -1174,7 +1181,7 @@ function SaveIndicator({ state, lastSavedAt }: { state: SaveState; lastSavedAt: 
     label = 'Not saved yet — waiting for the network';
     icon = <CloudOff className="size-4 text-warning" aria-hidden="true" />;
   } else if (lastSavedAt) {
-    label = `Saved ${new Date(parseTs(lastSavedAt)).toLocaleTimeString()}`;
+    label = `Saved ${formatIST(parseTs(lastSavedAt), 'time')}`;
   }
   return (
     <div className="save-state" role="status" aria-live="polite">

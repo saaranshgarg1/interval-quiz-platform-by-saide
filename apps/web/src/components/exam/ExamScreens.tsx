@@ -1,3 +1,4 @@
+import { formatIST } from '../../lib/time';
 import { useEffect, useMemo } from 'react';
 import {
   AlertTriangle,
@@ -405,8 +406,7 @@ export function FinishedScreen({
 }
 
 export function formatClock(ts: string): string {
-  const d = new Date(ts.includes('T') ? ts : `${ts.replace(' ', 'T')}Z`);
-  return Number.isNaN(d.getTime()) ? ts : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return formatIST(ts, 'timeShort');
 }
 
 export function formatMs(ms: number): string {

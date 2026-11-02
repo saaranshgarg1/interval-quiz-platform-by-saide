@@ -285,6 +285,7 @@ export function monitorSnapshot(quizId: number) {
         duration_minutes: version.duration_minutes,
         question_count: questionRepo.countForVersion(version.id),
         quiz_type: version.quiz_type,
+        negative_marking: questionRepo.hasNegativeMarking(version.id),
       }),
     },
     summary,

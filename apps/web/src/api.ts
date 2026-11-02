@@ -1,4 +1,20 @@
+import { noteServerTime } from './lib/time';
 const TOKEN_KEY = 'interval.token';
+
+/**
+ * Where the API lives. Empty (the default) = same origin, which is how the
+ * server serves the built site itself. A static host such as Vercel has no API,
+ * so its build sets VITE_API_BASE to the server's public address
+ * (e.g. https://xyz.trycloudflare.com) and every request goes there directly.
+ */
+export const API_BASE = ((import.meta as ImportMeta & { env: { VITE_API_BASE?: string } }).env.VITE_API_BASE ?? '')
+  .trim()
+  .replace(/\/+$/, '');
+
+/** URL for an API path such as '/health' (same-origin unless VITE_API_BASE is set). */
+export function apiUrl(path: string): string {
+  return `${API_BASE}/api${path}`;
+}
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -37,7 +53,10 @@ async function request<T>(path: string, init: RequestInit = {}, opts: RequestOpt
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`/api${path}`, { ...init, headers, keepalive: opts.keepalive, signal: opts.signal });
+  const sentAt = Date.now();
+  const res = await fetch(apiUrl(path), { ...init, headers, keepalive: opts.keepalive, signal: opts.signal });
+  const serverTime = res.headers.get('X-Server-Time');
+  if (serverTime) noteServerTime(Number(serverTime), sentAt, Date.now());
   if (!res.ok) {
     let message = `Request failed (${res.status}).`;
     let data: Record<string, unknown> = {};
@@ -89,7 +108,7 @@ export async function withNetworkRetry<T>(fn: () => Promise<T>, attempts = 4): P
 /** Download an authenticated file (e.g. the gradebook CSV) without exposing the token in a URL. */
 export async function downloadFile(path: string, filename: string): Promise<void> {
   const token = getToken();
-  const res = await fetch(`/api${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  const res = await fetch(apiUrl(path), { headers: token ? { Authorization: `Bearer ${token}` } : {} });
   if (!res.ok) {
     let message = `Download failed (${res.status}).`;
     try {
