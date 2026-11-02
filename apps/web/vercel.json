@@ -1,4 +1,17 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "rewrites": [{ "source": "/((?!assets/).*)", "destination": "/index.html" }]
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://upgrades-bacterial-kit-auckland.trycloudflare.com/api/:path*"
+    },
+    {
+      "source": "/socket.io/:path*",
+      "destination": "https://upgrades-bacterial-kit-auckland.trycloudflare.com/socket.io/:path*"
+    },
+    {
+      "source": "/((?!assets/).*)",
+      "destination": "/index.html"
+    }
+  ]
 }
