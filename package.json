@@ -2,6 +2,7 @@
   "name": "interval",
   "version": "0.1.0",
   "private": true,
+  "license": "CC-BY-4.0",
   "description": "Interval — quiz portal for the sAIDE website (IIT Ropar). From-scratch graded & practice assessments.",
   "engines": {
     "node": ">=24"

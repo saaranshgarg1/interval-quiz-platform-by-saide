@@ -8,4 +8,5 @@ apps/web/.vite/
 .claude
 .env
 .env.*
+!.env.example
 test-results/

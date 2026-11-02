@@ -109,3 +109,12 @@ pnpm run build        # production build: API (tsc) + web (vite) -> apps/web/dis
 pnpm run typecheck    # type-check both workspaces
 pnpm --filter @interval/api loadtest   # simulate 500 students against a production build
 ```
+
+---
+
+## License
+
+© 2026 Saaransh Garg and Shlok Vaidya. Licensed under
+[Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/): you may
+share and adapt this work for any purpose, including commercially, as long as you give appropriate credit, link to
+the license and indicate if changes were made. Full text in [LICENSE](LICENSE).
