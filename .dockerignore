@@ -15,12 +15,8 @@ test-results/
 coverage/
 
 # Documentation & Reports
-docs/
-eval_criterias/
-lab5/
-RBAC.md
+documents/
 README.md
-Literature_Proposal.pdf
 DESIGN.md
 
 # Environment & Secrets
@@ -43,5 +39,4 @@ DESIGN.md
 .vscode/
 *.local
 .claude/
-skills-lock.json
 
