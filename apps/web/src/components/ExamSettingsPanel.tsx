@@ -1,11 +1,23 @@
-import { useId } from 'react';
-import { Dices, Fullscreen, KeyRound, ListOrdered, LogOut, Network, ShieldAlert, Timer } from 'lucide-react';
+import { useId, useState } from 'react';
+import {
+  Dices,
+  Fullscreen,
+  KeyRound,
+  ListOrdered,
+  LogOut,
+  Network,
+  ShieldAlert,
+  SlidersHorizontal,
+  Sparkles,
+  Timer,
+} from 'lucide-react';
 import type { ExamSettings, SettingsPreset } from '../types';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Badge } from './ui/badge';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 
 /** Proctoring presets — must match api/services/exam-settings.ts PRESETS. */
 const PRESETS: Record<SettingsPreset, Partial<ExamSettings>> = {
@@ -51,9 +63,9 @@ const PRESETS: Record<SettingsPreset, Partial<ExamSettings>> = {
 };
 
 const PRESET_INFO: { key: SettingsPreset; title: string; body: string }[] = [
-  { key: 'practice', title: 'Practice', body: 'Nothing monitored. Students can come and go.' },
+  { key: 'practice', title: 'Practice', body: 'Nothing monitored. Students can come and go freely.' },
   { key: 'standard', title: 'Monitored', body: 'Switches recorded and warned; copy/paste blocked; watermark.' },
-  { key: 'strict', title: 'Strict exam', body: 'Full screen with Windows key / Alt+Tab blocked, no re-entry, lock after 3 violations.' },
+  { key: 'strict', title: 'Strict exam', body: 'Full screen with system shortcuts trapped, no re-entry, locks after 3 violations.' },
 ];
 
 export function presetOf(s: ExamSettings): SettingsPreset | 'custom' {
@@ -115,18 +127,6 @@ function Toggle({
   );
 }
 
-function Section({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
-  return (
-    <section className="rounded-[var(--radius-lg)] border p-4">
-      <h4 className="mb-1 flex items-center gap-2 text-sm font-semibold text-foreground">
-        {icon}
-        {title}
-      </h4>
-      {children}
-    </section>
-  );
-}
-
 const selectClass =
   'mt-1 block w-full rounded-[var(--radius-md)] border border-[var(--line-strong)] bg-card px-3 py-2 text-sm focus:outline-none focus:ring-[3px] focus:ring-ring/40 disabled:opacity-60';
 
@@ -149,6 +149,10 @@ export function ExamSettingsPanel({
     onChange(next);
   };
   const preset = presetOf(value);
+  const [configMode, setConfigMode] = useState<'preset' | 'manual'>(() =>
+    preset === 'custom' ? 'manual' : 'preset',
+  );
+
   const anyDetected = !value.allow_tab_switch || !value.allow_window_switch || value.require_fullscreen;
 
   const generateCode = () => {
@@ -159,208 +163,281 @@ export function ExamSettingsPanel({
 
   return (
     <div className="space-y-4">
-      <div>
-        <div className="mb-2 flex items-center gap-2">
-          <Label>Start from a preset</Label>
+      {/* Top mode switcher: Presets vs Manual configuration */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 pb-3">
+        <div className="flex items-center gap-2">
+          <Label className="text-sm font-semibold">Configuration mode:</Label>
           <Badge variant={preset === 'custom' ? 'outline' : 'secondary'}>
             {preset === 'custom' ? 'Custom rules' : PRESET_INFO.find((p) => p.key === preset)?.title}
           </Badge>
         </div>
-        <div className="grid gap-2 sm:grid-cols-3">
-          {PRESET_INFO.map((p) => (
-            <button
-              key={p.key}
-              type="button"
-              disabled={disabled}
-              onClick={() => onChange({ ...value, ...PRESETS[p.key] })}
-              className={`rounded-[var(--radius-md)] border p-3 text-left text-sm transition-colors hover:bg-accent/40 disabled:opacity-60 ${
-                preset === p.key ? 'border-primary bg-primary/5' : ''
-              }`}
-            >
-              <div className="font-semibold text-foreground">{p.title}</div>
-              <div className="text-xs text-muted-foreground">{p.body}</div>
-            </button>
-          ))}
-        </div>
+        <Tabs
+          value={configMode}
+          onValueChange={(v) => setConfigMode(v as 'preset' | 'manual')}
+          className="w-auto"
+        >
+          <TabsList className="h-9">
+            <TabsTrigger value="preset" className="gap-1.5 px-3 text-xs">
+              <Sparkles className="size-3.5 text-primary" aria-hidden="true" />
+              Use preset
+            </TabsTrigger>
+            <TabsTrigger value="manual" className="gap-1.5 px-3 text-xs">
+              <SlidersHorizontal className="size-3.5" aria-hidden="true" />
+              Manual configuration
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Section icon={<ShieldAlert className="size-4 text-primary" aria-hidden="true" />} title="Browser rules">
-          <Toggle
-            label="Allow switching tabs"
-            description="Off: leaving the quiz tab counts as a violation."
-            checked={value.allow_tab_switch}
-            onChange={(v) => set({ allow_tab_switch: v })}
-            disabled={disabled}
-          />
-          <Toggle
-            label="Allow switching windows / apps"
-            description="Off: moving focus to another window or app counts as a violation."
-            checked={value.allow_window_switch}
-            onChange={(v) => set({ allow_window_switch: v })}
-            disabled={disabled}
-          />
-          <Toggle
-            label="Allow copy & paste"
-            description="Off: copy, cut, paste, drag-in, print and dev-tools shortcuts are blocked and logged."
-            checked={value.allow_copy_paste}
-            onChange={(v) => set({ allow_copy_paste: v })}
-            disabled={disabled}
-          />
-          <Toggle
-            label="Allow right-click"
-            checked={value.allow_right_click}
-            onChange={(v) => set({ allow_right_click: v })}
-            disabled={disabled}
-          />
-          <Toggle
-            label="Require full screen"
-            description="Opens in full screen when the student starts; questions are hidden outside it and leaving is a violation."
-            checked={value.require_fullscreen}
-            onChange={(v) => set({ require_fullscreen: v, ...(v ? {} : { lock_keyboard: false }) })}
-            disabled={disabled}
-          />
-          <Toggle
-            label="Block Windows key, Alt+Tab and Esc"
-            description="Chrome/Edge keyboard lock in full screen: these keys go to the quiz, not the OS; leaving full screen needs Esc held down. Students must use Chrome or Edge. Turns on full screen."
-            checked={value.lock_keyboard}
-            onChange={(v) => set({ lock_keyboard: v, ...(v ? { require_fullscreen: true } : {}) })}
-            disabled={disabled}
-          />
-          <Toggle
-            label="Watermark with name & entry number"
-            description="Makes leaked screenshots traceable."
-            checked={value.watermark}
-            onChange={(v) => set({ watermark: v })}
-            disabled={disabled}
-          />
-        </Section>
-
-        <div className="space-y-4">
-          <Section icon={<ShieldAlert className="size-4 text-warning" aria-hidden="true" />} title="When rules are broken">
-            {!anyDetected ? (
-              <p className="py-2 text-xs text-muted-foreground">
-                Turn off tab/window switching or require full screen to count violations.
-              </p>
-            ) : (
-              <div className="grid grid-cols-2 gap-3 py-2">
-                <div>
-                  <Label htmlFor="violation-action">Action</Label>
-                  <select
-                    id="violation-action"
-                    className={selectClass}
-                    value={value.violation_action}
-                    disabled={disabled}
-                    onChange={(e) => set({ violation_action: e.target.value as ExamSettings['violation_action'] })}
-                  >
-                    <option value="none">Warn & record only</option>
-                    <option value="lock">Lock for my review</option>
-                    <option value="submit">Submit automatically</option>
-                  </select>
-                </div>
-                <div>
-                  <Label htmlFor="max-violations">After how many</Label>
-                  <Input
-                    id="max-violations"
-                    type="number"
-                    min={1}
-                    max={100}
-                    value={value.max_violations}
-                    disabled={disabled || value.violation_action === 'none'}
-                    onChange={(e) => set({ max_violations: Math.max(1, Number(e.target.value) || 1) })}
-                  />
-                </div>
-                <p className="col-span-2 text-xs text-muted-foreground">
-                  Students see a warning with the running count every time. One real switch is counted once.
-                </p>
-              </div>
-            )}
-          </Section>
-
-          <Section icon={<LogOut className="size-4 text-primary" aria-hidden="true" />} title="Exit & resume">
-            <Toggle
-              label="Allow leaving and continuing later"
-              description="On: a student who closes the tab (or switches device) can come back while time remains. Reloading is always fine."
-              checked={value.allow_resume}
-              onChange={(v) => set({ allow_resume: v })}
-              disabled={disabled}
-            />
-            {!value.allow_resume && (
-              <div className="pb-2">
-                <Label htmlFor="reentry">If a student comes back after leaving</Label>
-                <select
-                  id="reentry"
-                  className={selectClass}
-                  value={value.reentry_action}
-                  disabled={disabled}
-                  onChange={(e) => set({ reentry_action: e.target.value as ExamSettings['reentry_action'] })}
-                >
-                  <option value="lock">Lock the attempt for my review</option>
-                  <option value="submit">Submit it with saved answers</option>
-                </select>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  You can approve a re-entry for one student from the live monitor (e.g. a crashed laptop).
-                </p>
-              </div>
-            )}
-          </Section>
-        </div>
-
-        <Section icon={<Timer className="size-4 text-primary" aria-hidden="true" />} title="Navigation & question timers">
-          <div className="grid grid-cols-2 gap-3 py-2">
-            <div>
-              <Label htmlFor="question-timer">Per-question timer</Label>
-              <select
-                id="question-timer"
-                className={selectClass}
-                value={value.question_timer}
+      {configMode === 'preset' ? (
+        <div className="space-y-4 pt-1">
+          <p className="text-xs text-muted-foreground">
+            Select a battle-tested rule preset, or switch to <strong>Manual configuration</strong> to fine-tune individual policies.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {PRESET_INFO.map((p) => (
+              <button
+                key={p.key}
+                type="button"
                 disabled={disabled}
-                onChange={(e) => set({ question_timer: e.target.value as ExamSettings['question_timer'] })}
+                onClick={() => onChange({ ...value, ...PRESETS[p.key] })}
+                className={`rounded-[var(--radius-lg)] border p-4 text-left transition-all hover:bg-accent/40 disabled:opacity-60 ${
+                  preset === p.key
+                    ? 'border-primary bg-primary/5 shadow-xs ring-1 ring-primary/25'
+                    : 'border-border/80 bg-card hover:border-border'
+                }`}
               >
-                <option value="off">Off</option>
-                <option value="uniform">Same time for every question</option>
-                <option value="per_question">Set on each question</option>
-              </select>
+                <div className="flex items-center justify-between">
+                  <div className="font-semibold text-foreground">{p.title}</div>
+                  {preset === p.key && (
+                    <span className="size-2 rounded-full bg-primary" aria-hidden="true" />
+                  )}
+                </div>
+                <div className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{p.body}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        /* Tabbed Manual Controls */
+        <Tabs defaultValue="browser" className="w-full pt-1">
+          <TabsList className="grid h-10 w-full grid-cols-4 bg-muted/70 p-1">
+            <TabsTrigger value="browser" className="text-xs sm:text-sm">
+              Browser rules
+            </TabsTrigger>
+            <TabsTrigger value="violations" className="text-xs sm:text-sm">
+              Violations & Exit
+            </TabsTrigger>
+            <TabsTrigger value="timing" className="text-xs sm:text-sm">
+              Timers & Flow
+            </TabsTrigger>
+            <TabsTrigger value="access" className="text-xs sm:text-sm">
+              Access & Pool
+            </TabsTrigger>
+          </TabsList>
+
+          {/* Tab 1: Browser rules */}
+          <TabsContent value="browser" className="mt-3 rounded-[var(--radius-lg)] border border-border/80 bg-card p-5">
+            <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+              <ShieldAlert className="size-4 text-primary" aria-hidden="true" />
+              Browser integrity & environment
             </div>
-            <div>
-              <Label htmlFor="question-seconds">
-                {value.question_timer === 'per_question' ? 'Default seconds' : 'Seconds per question'}
-              </Label>
-              <Input
-                id="question-seconds"
-                type="number"
-                min={5}
-                max={7200}
-                value={value.question_time_seconds}
-                disabled={disabled || value.question_timer === 'off'}
-                onChange={(e) => set({ question_time_seconds: Math.max(5, Number(e.target.value) || 5) })}
+            <div className="divide-y divide-border/60">
+              <Toggle
+                label="Allow switching tabs"
+                description="Off: leaving the quiz tab counts as a violation."
+                checked={value.allow_tab_switch}
+                onChange={(v) => set({ allow_tab_switch: v })}
+                disabled={disabled}
+              />
+              <Toggle
+                label="Allow switching windows / apps"
+                description="Off: moving focus to another window or app counts as a violation."
+                checked={value.allow_window_switch}
+                onChange={(v) => set({ allow_window_switch: v })}
+                disabled={disabled}
+              />
+              <Toggle
+                label="Allow copy & paste"
+                description="Off: copy, cut, paste, drag-in, print and devtools shortcuts are blocked and logged."
+                checked={value.allow_copy_paste}
+                onChange={(v) => set({ allow_copy_paste: v })}
+                disabled={disabled}
+              />
+              <Toggle
+                label="Allow right-click"
+                description="Off: disables browser context menu during the attempt."
+                checked={value.allow_right_click}
+                onChange={(v) => set({ allow_right_click: v })}
+                disabled={disabled}
+              />
+              <Toggle
+                label="Require full screen"
+                description="Opens in full screen when starting; questions are hidden outside it and leaving is a violation."
+                checked={value.require_fullscreen}
+                onChange={(v) => set({ require_fullscreen: v, ...(v ? {} : { lock_keyboard: false }) })}
+                disabled={disabled}
+              />
+              <Toggle
+                label="Block Windows key, Alt+Tab and Esc"
+                description="Cross-browser keyboard protection: hardware lock on Chrome/Edge, DOM interceptor guard on Firefox and other browsers."
+                checked={value.lock_keyboard}
+                onChange={(v) => set({ lock_keyboard: v, ...(v ? { require_fullscreen: true } : {}) })}
+                disabled={disabled}
+              />
+              <Toggle
+                label="Watermark with student identity"
+                description="Adds student name and entry number watermark across questions."
+                checked={value.watermark}
+                onChange={(v) => set({ watermark: v })}
+                disabled={disabled}
               />
             </div>
-          </div>
-          <div className="pb-2">
-            <Label htmlFor="navigation" className="flex items-center gap-1.5">
-              <ListOrdered className="size-4" aria-hidden="true" /> Navigation
-            </Label>
-            <select
-              id="navigation"
-              className={selectClass}
-              value={value.navigation}
-              disabled={disabled || value.question_timer !== 'off'}
-              onChange={(e) => set({ navigation: e.target.value as ExamSettings['navigation'] })}
-            >
-              <option value="free">Free — move between questions, change answers</option>
-              <option value="sequential">One way — one question at a time, no going back</option>
-            </select>
-            {value.question_timer !== 'off' && (
-              <p className="mt-1 text-xs text-muted-foreground">Question timers always use one-way navigation.</p>
-            )}
-          </div>
-        </Section>
+          </TabsContent>
 
-        <Section icon={<KeyRound className="size-4 text-primary" aria-hidden="true" />} title="Access & question pool">
-          <div className="space-y-3 py-2">
+          {/* Tab 2: Violations & Exit */}
+          <TabsContent value="violations" className="mt-3 space-y-4">
+            <div className="rounded-[var(--radius-lg)] border border-border/80 bg-card p-5">
+              <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+                <ShieldAlert className="size-4 text-warning" aria-hidden="true" />
+                Violation handling
+              </div>
+              {!anyDetected ? (
+                <p className="py-2 text-xs text-muted-foreground">
+                  Turn off tab/window switching or require full screen in Browser rules to count violations.
+                </p>
+              ) : (
+                <div className="grid gap-4 sm:grid-cols-2 pt-2">
+                  <div>
+                    <Label htmlFor="violation-action">Action on threshold</Label>
+                    <select
+                      id="violation-action"
+                      className={selectClass}
+                      value={value.violation_action}
+                      disabled={disabled}
+                      onChange={(e) => set({ violation_action: e.target.value as ExamSettings['violation_action'] })}
+                    >
+                      <option value="none">Warn & record only</option>
+                      <option value="lock">Lock for instructor review</option>
+                      <option value="submit">Submit attempt automatically</option>
+                    </select>
+                  </div>
+                  <div>
+                    <Label htmlFor="max-violations">Max allowed violations</Label>
+                    <Input
+                      id="max-violations"
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={value.max_violations}
+                      disabled={disabled || value.violation_action === 'none'}
+                      onChange={(e) => set({ max_violations: Math.max(1, Number(e.target.value) || 1) })}
+                    />
+                  </div>
+                  <p className="sm:col-span-2 text-xs text-muted-foreground">
+                    Students receive warning popups with a live strike count each time. One real switch counts as one violation.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-[var(--radius-lg)] border border-border/80 bg-card p-5">
+              <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+                <LogOut className="size-4 text-primary" aria-hidden="true" />
+                Exit & Resume
+              </div>
+              <Toggle
+                label="Allow leaving and resuming later"
+                description="On: students who close their tab or switch devices can continue while time remains."
+                checked={value.allow_resume}
+                onChange={(v) => set({ allow_resume: v })}
+                disabled={disabled}
+              />
+              {!value.allow_resume && (
+                <div className="pt-2">
+                  <Label htmlFor="reentry">If student returns after leaving</Label>
+                  <select
+                    id="reentry"
+                    className={selectClass}
+                    value={value.reentry_action}
+                    disabled={disabled}
+                    onChange={(e) => set({ reentry_action: e.target.value as ExamSettings['reentry_action'] })}
+                  >
+                    <option value="lock">Lock attempt for review</option>
+                    <option value="submit">Submit immediately with saved answers</option>
+                  </select>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Instructors can unlock attempts from the live monitor (e.g. for computer reboots).
+                  </p>
+                </div>
+              )}
+            </div>
+          </TabsContent>
+
+          {/* Tab 3: Timers & Navigation */}
+          <TabsContent value="timing" className="mt-3 rounded-[var(--radius-lg)] border border-border/80 bg-card p-5">
+            <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
+              <Timer className="size-4 text-primary" aria-hidden="true" />
+              Navigation flow & per-question timing
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="question-timer">Per-question timer mode</Label>
+                <select
+                  id="question-timer"
+                  className={selectClass}
+                  value={value.question_timer}
+                  disabled={disabled}
+                  onChange={(e) => set({ question_timer: e.target.value as ExamSettings['question_timer'] })}
+                >
+                  <option value="off">Off (whole quiz timer only)</option>
+                  <option value="uniform">Same time for every question</option>
+                  <option value="per_question">Individual time per question</option>
+                </select>
+              </div>
+              <div>
+                <Label htmlFor="question-seconds">
+                  {value.question_timer === 'per_question' ? 'Default seconds' : 'Seconds per question'}
+                </Label>
+                <Input
+                  id="question-seconds"
+                  type="number"
+                  min={5}
+                  max={7200}
+                  value={value.question_time_seconds}
+                  disabled={disabled || value.question_timer === 'off'}
+                  onChange={(e) => set({ question_time_seconds: Math.max(5, Number(e.target.value) || 5) })}
+                />
+              </div>
+            </div>
+            <div className="mt-4 border-t border-border/60 pt-4">
+              <Label htmlFor="navigation" className="flex items-center gap-1.5">
+                <ListOrdered className="size-4" aria-hidden="true" /> Question navigation flow
+              </Label>
+              <select
+                id="navigation"
+                className={selectClass}
+                value={value.navigation}
+                disabled={disabled || value.question_timer !== 'off'}
+                onChange={(e) => set({ navigation: e.target.value as ExamSettings['navigation'] })}
+              >
+                <option value="free">Free — move between questions, review and change answers</option>
+                <option value="sequential">One way — one question at a time, no backtracking</option>
+              </select>
+              {value.question_timer !== 'off' && (
+                <p className="mt-1 text-xs text-muted-foreground">Question timers enforce one-way sequential navigation.</p>
+              )}
+            </div>
+          </TabsContent>
+
+          {/* Tab 4: Access & Pool */}
+          <TabsContent value="access" className="mt-3 rounded-[var(--radius-lg)] border border-border/80 bg-card p-5 space-y-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+              <KeyRound className="size-4 text-primary" aria-hidden="true" />
+              Access code, network restrictions & pools
+            </div>
             <div>
-              <Label htmlFor="access-code">Access code (announce it in the exam hall)</Label>
+              <Label htmlFor="access-code">Exam access code</Label>
               <div className="mt-1 flex gap-2">
                 <Input
                   id="access-code"
@@ -375,6 +452,7 @@ export function ExamSettingsPanel({
                 </Button>
               </div>
             </div>
+
             <div>
               <Label htmlFor="networks" className="flex items-center gap-1.5">
                 <Network className="size-4" aria-hidden="true" /> Allowed networks (IP or CIDR, optional)
@@ -383,15 +461,16 @@ export function ExamSettingsPanel({
                 id="networks"
                 rows={2}
                 disabled={disabled}
-                placeholder="e.g. 10.10.0.0/16 for the exam-hall LAN — leave empty for any network"
+                placeholder="e.g. 10.10.0.0/16 for exam-hall LAN — leave empty for any network"
                 value={value.allowed_networks.join('\n')}
                 onChange={(e) => set({ allowed_networks: e.target.value.split(/[\s,;]+/).filter(Boolean) })}
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+
+            <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <Label htmlFor="draw" className="flex items-center gap-1.5">
-                  <Dices className="size-4" aria-hidden="true" /> Random questions per student
+                  <Dices className="size-4" aria-hidden="true" /> Random question pool per student
                 </Label>
                 <Input
                   id="draw"
@@ -403,6 +482,11 @@ export function ExamSettingsPanel({
                   value={value.questions_per_attempt ?? ''}
                   onChange={(e) => set({ questions_per_attempt: e.target.value === '' ? null : Math.max(1, Number(e.target.value)) })}
                 />
+                {value.questions_per_attempt !== null && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Ensure equal points across questions for score uniformity.
+                  </p>
+                )}
               </div>
               <div>
                 <Label htmlFor="late-entry">Late entry closes after (min)</Label>
@@ -418,20 +502,14 @@ export function ExamSettingsPanel({
                 />
               </div>
             </div>
-            {value.questions_per_attempt !== null && (
-              <p className="text-xs text-muted-foreground">
-                Use equal points per question so every student’s paper is worth the same.
-              </p>
-            )}
-          </div>
-        </Section>
-      </div>
+          </TabsContent>
+        </Tabs>
+      )}
 
       {value.require_fullscreen && (
-        <p className="flex items-start gap-2 text-xs text-muted-foreground">
-          <Fullscreen className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-          Browser rules deter and record; they cannot make cheating impossible. For high-stakes exams combine them with
-          invigilation, an access code and the exam-hall network restriction.
+        <p className="flex items-start gap-2 text-xs text-muted-foreground pt-1">
+          <Fullscreen className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+          Full-screen mode deter and record events. For secure in-person exams, combine with invigilation, an access code, and campus network restrictions.
         </p>
       )}
     </div>

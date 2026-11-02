@@ -27,7 +27,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { setAttemptSession } from '../lib/attempt-storage';
-import { keyboardLockSupported } from '../lib/exam-guard';
+import { keyboardLockSupported, hasHardwareKeyboardLock } from '../lib/exam-guard';
 
 const PRESET_LABEL: Record<string, string> = {
   practice: 'Practice',
@@ -77,12 +77,13 @@ function useSystemCheck(settings: PublicExamSettings | null, enabled: boolean): 
   ];
   if (settings.lock_keyboard) {
     const ok = keyboardLockSupported();
+    const hardware = hasHardwareKeyboardLock();
     checks.push({
       label: 'Keyboard lock (Windows key, Alt+Tab, Esc)',
       ok,
-      detail: ok
+      detail: hardware
         ? 'Supported. These keys will be disabled once the quiz is in full screen.'
-        : 'Not available in this browser. This quiz needs an up-to-date Chrome or Edge.',
+        : 'Supported in this browser via exam guard key interceptor.',
     });
   }
   if (settings.require_fullscreen) {

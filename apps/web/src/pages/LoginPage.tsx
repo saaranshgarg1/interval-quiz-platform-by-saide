@@ -243,8 +243,11 @@ export function LoginPage() {
     gis.renderButton(googleButton.current, {
       theme: 'outline',
       size: 'large',
+      type: 'standard',
+      shape: 'rectangular',
       text: 'continue_with',
-      width: Math.min(400, Math.max(200, googleButton.current.offsetWidth || 320)),
+      logo_alignment: 'left',
+      width: Math.min(400, Math.max(240, googleButton.current.offsetWidth || 340)),
     });
   }, [google, sso, navigate]);
 
@@ -441,7 +444,7 @@ export function LoginPage() {
                   <div
                     id="google-sso-button"
                     ref={googleButton}
-                    className="flex min-h-[44px] w-full items-center justify-center rounded-[var(--radius-md)]"
+                    className="flex min-h-[44px] w-full items-center justify-center overflow-hidden rounded-[var(--radius-md)] border border-border/80 bg-background shadow-xs transition-colors hover:border-foreground/20"
                   />
                   <p className="mt-2 text-center text-xs text-muted-foreground">
                     Google sign-in is for @{google.domain} accounts only.
@@ -451,18 +454,20 @@ export function LoginPage() {
                 <>
                   <Button
                     type="button"
-                    variant="secondary"
-                    className="w-full"
+                    variant="outline"
+                    className="h-11 w-full gap-2.5 font-medium shadow-xs transition-colors hover:bg-muted/50"
                     disabled
                     aria-disabled="true"
                     aria-describedby="google-sso-note"
                   >
                     {google.status === 'loading' ? (
-                      <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                      <Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden="true" />
                     ) : (
-                      <GoogleGlyph className="size-4" />
+                      <GoogleGlyph className="size-4 shrink-0" />
                     )}
-                    {google.status === 'loading' ? 'Checking Google sign-in…' : 'Google sign-in unavailable'}
+                    <span className="text-sm">
+                      {google.status === 'loading' ? 'Checking Google sign-in…' : 'Continue with Google'}
+                    </span>
                   </Button>
                   {google.status === 'disabled' && (
                     <p id="google-sso-note" role="status" className="mt-2 text-center text-xs text-muted-foreground">

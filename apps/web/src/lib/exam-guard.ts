@@ -21,10 +21,15 @@ interface KeyboardLockApi {
   unlock?: () => void;
 }
 
-/** Chrome/Edge expose navigator.keyboard.lock(); other browsers do not. */
-export function keyboardLockSupported(): boolean {
+/** Check if hardware-level Keyboard Lock API is available (Chrome/Edge). */
+export function hasHardwareKeyboardLock(): boolean {
   const kb = (navigator as Navigator & { keyboard?: KeyboardLockApi }).keyboard;
   return typeof kb?.lock === 'function';
+}
+
+/** Keyboard lock support: hardware lock on Chromium, captured DOM-level guard on Firefox/others. */
+export function keyboardLockSupported(): boolean {
+  return typeof window !== 'undefined' && typeof document?.addEventListener === 'function';
 }
 
 interface GuardOptions {
@@ -91,19 +96,40 @@ export function useExamGuard({ active, settings, report }: GuardOptions) {
     return () => kb.unlock?.();
   }, [active, lockKeyboard, fullscreen]);
 
-  // System keys reaching the page (they cannot act while locked): swallow and log.
+  // System keys reaching the page: swallow and log across all browsers (Chrome, Edge, Firefox, etc.).
   useEffect(() => {
     if (!active || !lockKeyboard) return;
     const onKeyDown = (e: KeyboardEvent) => {
       const isWindowsKey = e.key === 'Meta' || e.key === 'OS' || e.code === 'MetaLeft' || e.code === 'MetaRight';
       const isAltTab = e.altKey && e.key === 'Tab';
-      if (!isWindowsKey && !isAltTab) return;
-      e.preventDefault();
-      send('system_key_attempt', isWindowsKey ? 'Pressed the Windows key (blocked).' : 'Pressed Alt+Tab (blocked).');
+      const isEsc = e.key === 'Escape' || e.code === 'Escape';
+      const isF11 = e.key === 'F11' || e.code === 'F11';
+
+      if (isWindowsKey || isAltTab) {
+        e.preventDefault();
+        e.stopPropagation();
+        send('system_key_attempt', isWindowsKey ? 'Pressed the Windows key (blocked).' : 'Pressed Alt+Tab (blocked).');
+        return;
+      }
+
+      if (isF11) {
+        e.preventDefault();
+        e.stopPropagation();
+        send('system_key_attempt', 'Pressed F11 (blocked).');
+        return;
+      }
+
+      // In non-Chromium (Firefox, Safari), Esc can drop fullscreen without hardware lock;
+      // intercept Esc in capture phase so students don't accidentally leave fullscreen.
+      if (isEsc && fullscreen && !hasHardwareKeyboardLock()) {
+        e.preventDefault();
+        e.stopPropagation();
+        send('system_key_attempt', 'Pressed Esc (blocked).');
+      }
     };
     document.addEventListener('keydown', onKeyDown, { capture: true });
     return () => document.removeEventListener('keydown', onKeyDown, { capture: true });
-  }, [active, lockKeyboard, send]);
+  }, [active, lockKeyboard, fullscreen, send]);
 
   // Tab and window switches.
   useEffect(() => {

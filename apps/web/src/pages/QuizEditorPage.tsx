@@ -528,7 +528,13 @@ export function QuizEditorPage() {
 
   return (
     <Page
-      title={title || 'Untitled quiz'}
+      title={
+        <div className="flex flex-wrap items-center gap-2.5">
+          <span>{title || 'Untitled quiz'}</span>
+          {draft && <Badge variant="warning">Draft v{draft.version}</Badge>}
+          {published && <Badge variant="success">Live v{published.version}</Badge>}
+        </div>
+      }
       description={`Course ID #${detail.course_id} · ${draft ? `Editing draft v${draft.version}` : `Viewing published v${published?.version}`}${published && published.quiz_type === 'scheduled' && published.window_opens_at ? ` · Opens ${formatIST(published.window_opens_at)} for ${published.window_duration_minutes} min` : ''}`}
       actions={
         <div className="flex items-center gap-2 flex-wrap">
@@ -538,8 +544,6 @@ export function QuizEditorPage() {
               Back
             </a>
           </Button>
-          {draft && <Badge variant="warning">Draft v{draft.version}</Badge>}
-          {published && <Badge variant="success">Live v{published.version}</Badge>}
           {editable && (
             <>
               <Button size="sm" variant="secondary" onClick={() => void openBankModal()}>
